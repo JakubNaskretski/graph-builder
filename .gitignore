@@ -1,0 +1,30 @@
+# Local data and exports
+samples/
+examples/
+force-app/
+obsidian-vault/
+*.zip
+*.sqlite
+
+# Local-only docs and tool settings
+*.local.md
+/CLAUDE.md
+/CONTRACT.md
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

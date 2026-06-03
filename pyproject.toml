@@ -1,0 +1,30 @@
+[project]
+name = "graph-builder"
+version = "0.1.0"
+description = "Parse a Salesforce force-app into a typed metadata graph (nodes + edges)"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+graph-builder = "graphbuilder.__main__:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+# OPTIONAL tree-sitter AST backend for the Apex extractor. Not a default
+# dependency: without it the extractor falls back to its regex backend unchanged.
+# The backend targets tree-sitter-language-pack's method-style node API; the major
+# versions are capped so a binding-changing upgrade isn't pulled in silently. The
+# runtime probe in extractors/apex.py is the backstop — it disables the AST backend
+# (regex stays) on any node-API mismatch, so a bump here is safe to try.
+ast = ["tree-sitter>=0.21,<1", "tree-sitter-language-pack>=0.1,<2"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["graphbuilder*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
