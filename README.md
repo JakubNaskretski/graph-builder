@@ -88,3 +88,35 @@ Extractors emit only structural **names and relationships** — never field valu
 record data, formulas, endpoints, or credentials. Leakage-prone metadata (Named
 Credentials, Static Resources) is deliberately not graphed, and SOQL/SOSL is walked
 for object/field identifiers only. Tests use fictional sample data.
+
+## Confluence (a second, joinable source)
+graph-builder can also ingest an on-prem **Confluence** space as its own graph and
+— deliberately, on demand — link pages to the Salesforce entities they document.
+See `graphbuilder/confluence/`.
+
+```sh
+# 1. collect a space into a local, gitignored dump (token from $CONFLUENCE_TOKEN ONLY)
+CONFLUENCE_TOKEN=… python scripts/confluence_collect.py \
+    --base-url https://wiki.example.internal --space ENG,OPS --out confluence-dump/
+
+# 2. build a Confluence graph with the ordinary builder — only the Confluence
+#    extractor matches *.page.json, so you get a Confluence-only graph
+python -m graphbuilder confluence-dump/ -o confluence-dump/confluence-graph.json
+
+# 3. join it to a Salesforce graph — page --documents--> the object/class it references
+python scripts/confluence_join.py confluence-dump/confluence-graph.json sf-graph.json -o joined.json
+```
+
+- **Nodes** `space` · `page` · `attachment` · `confluencelabel` · `confluenceuser`;
+  **edges** `child-of` · `links-to` · `attaches` · `labeled` · `mentions` ·
+  `authored-by` — all parsed from the storage-format markup, not guessed from prose.
+- **The join is separate and auditable.** `graphbuilder.confluence.join(confluence,
+  salesforce)` returns `documents` cross-edges tagged with `via`/`confidence` (org
+  URLs + exact title match by default; labels / body scan opt-in), so messy
+  Confluence content never contaminates the Salesforce graph — you keep only the
+  links you trust. `merge(...)` unions both graphs when you want one.
+
+> **Content & confidentiality.** Unlike the Salesforce extractors (names/structure
+> only), the Confluence source **captures page body text** (agent-facing knowledge).
+> Every dump and any built Confluence / joined graph therefore holds real content —
+> they are **gitignored and must never be committed or egressed**.

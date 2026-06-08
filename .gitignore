@@ -3,8 +3,10 @@ samples/
 examples/
 force-app/
 obsidian-vault/
+confluence-dump/
 *.zip
 *.sqlite
+*.page.json
 
 # Local-only docs and tool settings
 *.local.md
