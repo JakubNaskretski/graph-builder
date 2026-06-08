@@ -13,10 +13,16 @@ Public API:
   - ``permission_reachability(graph, target_id)`` — permissionset/profile ids that
     grant access to ``target_id`` directly or via a containing permset group.
   - ``graph_summary(graph)`` — counts of nodes/edges by type plus cycle/orphan totals.
+  - ``find_nodes(graph, query, types=None, limit=20)`` — ranked id/label search; the
+    retrieval entry point that resolves a name to concrete node id(s).
+  - ``node_text(node, root=None)`` — a node's full text (inline ``text`` attr, or the
+    file at its ``content`` pointer).
 """
 from __future__ import annotations
 
+import difflib
 from collections import Counter
+from pathlib import Path
 
 from . import model
 
@@ -169,3 +175,71 @@ def graph_summary(graph):
         "cycle_count": cycle_count,
         "orphan_count": len(orphans(graph)),
     }
+
+
+def _match_score(q: str, text: str) -> float:
+    """Match strength of lowercase ``q`` against lowercase ``text``: exact 1.0 >
+    prefix 0.9 > substring 0.75 > ``difflib`` ratio (kept only when >= 0.5)."""
+    if not text:
+        return 0.0
+    if text == q:
+        return 1.0
+    if text.startswith(q) or q.startswith(text):
+        return 0.9
+    if q in text or text in q:
+        return 0.75
+    ratio = difflib.SequenceMatcher(None, q, text).ratio()
+    return ratio if ratio >= 0.5 else 0.0
+
+
+def find_nodes(graph, query, types=None, limit=20):
+    """Rank nodes whose id-name or label matches ``query`` (case-insensitive).
+
+    The retrieval entry point: resolve a name found in text (e.g. a Confluence page
+    mentions "the Billing object") to concrete node id(s). ``types`` (a str or
+    iterable) restricts the search; ``limit`` caps the result (``None``/0 = no cap).
+    Deterministic — ties break by node id. Returns ``[{"id","type","label","score"}]``
+    best-first, dependency-free (stdlib ``difflib``)."""
+    if not graph or query is None:
+        return []
+    q = str(query).strip().lower()
+    if not q:
+        return []
+    type_filter = {types} if isinstance(types, str) else (set(types) if types else None)
+
+    scored = []
+    for n in graph.get("nodes", []) or []:
+        if not isinstance(n, dict):
+            continue
+        nid = n.get("id")
+        if not nid or (type_filter is not None and n.get("type") not in type_filter):
+            continue
+        name = str(nid).split("/", 1)[-1]
+        label = str(n.get("label") or name)
+        score = max(_match_score(q, name.lower()), _match_score(q, label.lower()))
+        if score > 0:
+            scored.append((score, nid, n))
+
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    lim = int(limit) if (limit and int(limit) > 0) else None
+    return [
+        {"id": nid, "type": n.get("type"), "label": n.get("label"), "score": round(score, 3)}
+        for score, nid, n in (scored[:lim] if lim else scored)
+    ]
+
+
+def node_text(node, root=None) -> str:
+    """Full text for a node: its inline ``text`` attr, else the file at its ``content``
+    pointer (relative to ``root``, the bundle root). Tolerant — ``""`` on a missing
+    attr/file or any read error."""
+    if not isinstance(node, dict):
+        return ""
+    if node.get("text"):
+        return str(node["text"])
+    rel = node.get("content")
+    if not rel:
+        return ""
+    try:
+        return (Path(root) / rel if root else Path(rel)).read_text(encoding="utf-8")
+    except Exception:
+        return ""

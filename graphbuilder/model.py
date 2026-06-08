@@ -25,6 +25,10 @@ NODE_TYPES = {
     "custommetadatarecord", "globalvalueset", "listview", "platformeventchannel",
     # external-only edge targets (referenced, never retrieved)
     "resource", "messagechannel",
+    # ---- Confluence source (a second, SEPARATE graph; see graphbuilder/confluence) ----
+    # Structural names plus page body text — a deliberate content-capture exception to
+    # the names-only rule, so Confluence outputs are sensitive-by-default and gitignored.
+    "space", "page", "attachment", "confluencelabel", "confluenceuser",
 }
 EDGE_TYPES = {
     "field_of", "lookup", "on", "calls", "references", "touches", "uses",
@@ -32,6 +36,9 @@ EDGE_TYPES = {
     "extends", "implements", "invocable", "aura-enabled", "wire",
     "reads", "writes", "subflow", "async", "validates", "formula",
     "tests", "requires",
+    # ---- Confluence: intra-source structure, plus `documents` (the cross-source join) ----
+    "child-of", "links-to", "attaches", "labeled", "mentions", "authored-by",
+    "documents",
 }
 
 

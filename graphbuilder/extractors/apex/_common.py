@@ -19,6 +19,7 @@ _ASYNC_IFACES = {
 _COLLECTION_WRAPPERS = {"list", "set", "map", "iterable"}
 
 # `FROM <obj>` in SOQL.
+# TODO: FROM gives the object; SELECT-field reads and SOSL RETURNING targets are not handled
 _SOQL_FROM_RE = re.compile(r"\bFROM\s+(\w+)", re.I)
 
 # A string literal (single-quoted; Apex has no double-quoted strings). Handles
