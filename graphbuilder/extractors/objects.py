@@ -58,11 +58,11 @@ _HOP = re.compile(
 
 
 def _text(el, tag: str) -> str:
-    c = _child(el, tag)
+    c = _child(el, tag)  # TODO: could reuse xmlutil.child_text (differs only in not stripping)
     return c.text if c is not None and c.text is not None else ""
 
 
-def _has_custom_settings_type(meta_path: Path) -> bool:
+def _has_custom_settings_type(meta_path: Path) -> bool:  # TODO: only presence is used; the value (List/Hierarchy) is safe to read if needed
     """True if the object-meta.xml declares a `<customSettingsType>` element.
 
     Structural presence check only; the element's value is never read. Falls back
@@ -93,6 +93,7 @@ def _classify(name: str, meta_path: Path) -> str:
     if n.endswith("__c"):
         return "custom"
     return "standard"
+# TODO: add __b (Big Object) and __x (External Object)
 
 
 def _relationship_target(seg: str, rel_to_object: dict) -> str:

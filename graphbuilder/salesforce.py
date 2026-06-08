@@ -33,7 +33,7 @@ class SFObject:
     name: str
     label: str = ""
     fields: list = field(default_factory=list)            # list[SFField]
-    validation_rules: list = field(default_factory=list)  # list[str]
+    validation_rules: list = field(default_factory=list)  # rule names; TODO: unused (validates edges come from objects.py) — drop or repurpose
 
 
 @dataclass
@@ -43,7 +43,7 @@ class SFClass:
     implements: list = field(default_factory=list)
     sobject_refs: set = field(default_factory=set)        # custom objects referenced
     class_refs: set = field(default_factory=set)          # other apex classes referenced
-    kind: str = "class"                                   # class | batch | schedulable
+    kind: str = "class"                                   # async category: class|batch|schedulable; TODO: add abstract/interface if needed
     source: str = ""
 
 
@@ -183,13 +183,13 @@ def parse_apex(path: Path) -> SFClass:
     kind = "class"
     impl_join = " ".join(implements)
     if "Batchable" in impl_join:
-        kind = "batch"
+        kind = "batch"  # TODO: direct-implements only — misses inherited/multiple async interfaces
     elif "Schedulable" in impl_join:
         kind = "schedulable"
     sobj = set(re.findall(r"\b(\w+__c)\b", s))                    # custom objects/fields
     sobj |= set(re.findall(r"\bFROM\s+(\w+)", s, re.I))          # SOQL targets
     return SFClass(name=name, extends=extends, implements=implements,
-                   sobject_refs=sobj, kind=kind, source=raw)
+                   sobject_refs=sobj, kind=kind, source=raw)  # TODO(NOISE-1/2): __c also matches custom fields; system calls (String.valueOf, JSON.serialize) leak — add a system-namespace denylist
 
 
 def parse_trigger(path: Path) -> SFTrigger:

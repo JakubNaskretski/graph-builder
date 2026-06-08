@@ -459,6 +459,7 @@ def extract_regex(path: Path):
     except Exception:
         code = src
 
+    # TODO: richer intra-class call chains/sequencing could aid the agent (enhancement)
     # qualified `ClassName.method(` -> method-level `calls` (in addition to the
     # base class-level `calls`). Self-class qualifier is skipped (intra-class
     # self-calls are emitted per-method in `_deep`).
@@ -494,6 +495,7 @@ def extract_regex(path: Path):
     except Exception:
         method_names = set()
 
+    # TODO: capture outbound HTTP/API callouts as a structure-only flag (never the endpoint/credential)
     # de-dup + record async kinds on the class node
     if async_kinds:
         cnode_attrs["async_kind"] = sorted(set(async_kinds))
