@@ -54,26 +54,33 @@ _EMAIL_ACTION_TYPES = frozenset({"emailAlert", "emailSimple"})
 
 
 def _lwc_name(raw):
-    """A screen-field extension/component reference -> bare LWC name, or None.
+    """A screen-field extension/component reference -> LWC name, or None.
 
-    Strips a leading namespace prefix (`c:Foo`, `c__Foo`, `ns:Foo`) so the edge
-    targets the component by its plain name. Anything that doesn't look like a
-    single component token is skipped.
+    Normalizes the namespace prefix. The default-namespace marker `c` (`c:Foo`,
+    `c__Foo`) is dropped so the edge matches the local `lwc/<name>` node, while a
+    real managed-package namespace is preserved in API form -- both `ns:Foo` and
+    `ns__Foo` -> `ns__Foo` -- so the edge targets the packaged component instead of
+    colliding with (or masquerading as) a local one. Anything that doesn't look
+    like a single component token is skipped.
     """
     if not raw:
         return None
     name = raw.strip()
     if not name:
         return None
-    # drop a `ns:` or `ns__` namespace prefix, keeping the component segment
+    # split off a `ns:` or `ns__` namespace prefix
+    ns = ""
     if ":" in name:
-        name = name.rsplit(":", 1)[-1]
+        ns, name = name.rsplit(":", 1)
     elif "__" in name:
-        name = name.rsplit("__", 1)[-1]
+        ns, name = name.rsplit("__", 1)
     name = name.strip()
     # a clean component token: no whitespace/dots left over
     if not name or " " in name or "." in name:
         return None
+    # default namespace (`c`/empty) -> bare local name; real namespace -> API form
+    if ns and ns != "c":
+        return f"{ns}__{name}"
     return name
 
 

@@ -82,10 +82,11 @@ class AppTabExtractor:
         flexipage = _child_text(root, "flexiPage")
 
         # custom-object tab: explicit <sobjectType>, or the tab name is the
-        # object API name (ends with __c).
+        # object API name (any custom suffix: __c/__e/__mdt/__x/__b, incl. the
+        # __x external-object tabs that packaged orgs commonly expose).
         if sobject:
             edges.append(raw_edge(tid, "references", "object", sobject))
-        elif name.endswith("__c"):
+        elif name.lower().endswith(("__c", "__e", "__mdt", "__x", "__b")):
             edges.append(raw_edge(tid, "references", "object", name))
         # lwc / aura component tab
         elif lwc:
