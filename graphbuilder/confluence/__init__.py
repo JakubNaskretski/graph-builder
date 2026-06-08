@@ -22,7 +22,8 @@ never commit or egress it.
 """
 from __future__ import annotations
 
+from .classify import apply_classifications
 from .collect import collect
 from .join import join, merge
 
-__all__ = ["collect", "join", "merge"]
+__all__ = ["collect", "join", "merge", "apply_classifications"]

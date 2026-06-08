@@ -32,12 +32,15 @@ def main(argv=None) -> int:
     ap.add_argument("--per-page", type=int, default=50, help="REST page size (default: 50)")
     ap.add_argument("--insecure", action="store_true",
                     help="disable TLS verification (self-signed on-prem certs) — a knowing choice")
+    ap.add_argument("--max-workers", type=int, default=None,
+                    help="fetch this many spaces concurrently (default: min(8, n_spaces))")
     args = ap.parse_args(argv)
 
     spaces = [s.strip() for s in args.space.split(",") if s.strip()]
     try:
         summary = collect(args.base_url, spaces, args.out,
-                          per_page=args.per_page, insecure=args.insecure)
+                          per_page=args.per_page, insecure=args.insecure,
+                          max_workers=args.max_workers)
     except CollectError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

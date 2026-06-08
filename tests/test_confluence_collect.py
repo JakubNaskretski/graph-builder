@@ -110,3 +110,24 @@ def test_multiple_spaces(tmp_path):
     op = _FakeOpener({"ENG": [_page("1")], "OPS": [_page("2"), _page("3")]})
     summary = collect("https://w", ["ENG", "OPS"], tmp_path, token="t", opener=op, sleep=NO_SLEEP)
     assert summary["spaces"] == {"ENG": 1, "OPS": 2} and summary["pages"] == 3
+
+
+def test_concurrent_spaces_match_sequential(tmp_path):
+    import threading
+
+    class _SafeOpener(_FakeOpener):
+        def __init__(self, pages):
+            super().__init__(pages)
+            self._lock = threading.Lock()
+
+        def open(self, req, timeout=None):
+            with self._lock:
+                return super().open(req, timeout)
+
+    pages = {"ENG": [_page("1"), _page("2")], "OPS": [_page("3")], "DOC": [_page("4")]}
+    seq = collect("https://w", ["ENG", "OPS", "DOC"], tmp_path / "s",
+                  token="t", opener=_SafeOpener(pages), sleep=NO_SLEEP, max_workers=1)
+    con = collect("https://w", ["ENG", "OPS", "DOC"], tmp_path / "c",
+                  token="t", opener=_SafeOpener(pages), sleep=NO_SLEEP, max_workers=4)
+    assert seq["spaces"] == con["spaces"] == {"ENG": 2, "OPS": 1, "DOC": 1}
+    assert seq["pages"] == con["pages"] == 4

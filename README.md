@@ -120,3 +120,77 @@ python scripts/confluence_join.py confluence-dump/confluence-graph.json sf-graph
 > only), the Confluence source **captures page body text** (agent-facing knowledge).
 > Every dump and any built Confluence / joined graph therefore holds real content —
 > they are **gitignored and must never be committed or egressed**.
+
+## Knowledge-base bundle (portable, zip + text, no DB)
+Package one or both sources into a self-contained **knowledge base** — a zip of
+text/JSON an on-prem agent can navigate offline. Two layers joined by pointers: a lean
+**graph** (structure + a `content` pointer + short `excerpt` per node) and a **content
+store** of flat files the graph points into. Under the no-DB constraint the graph *is*
+the retrieval index — following edges gives structural recall a flat dump can't.
+
+```sh
+python scripts/build_bundle.py --salesforce path/to/force-app \
+    --confluence confluence-dump/ --out knowledge-base/
+```
+
+```
+knowledge-base/                         (+ knowledge-base.zip)
+├── manifest.json   # provenance, counts, schema version
+├── graph.json      # nodes (structure + content pointers + excerpt) + edges
+├── content/
+│   ├── confluence/<SPACE>/<id>.txt     # page body (plain text)
+│   ├── confluence/<SPACE>/<id>.xhtml   # raw storage (tables, macros, diagram refs)
+│   └── salesforce/<path>               # copied source units
+└── README.txt
+```
+
+- Either source may be omitted; when both are present, page→SF `documents` edges are
+  added via the join.
+- Full body text lives in `content/*.txt`, **not** in `graph.json` (only a short
+  excerpt) — the graph stays small and the agent reads only what it needs.
+- Only source files that produced graph nodes are copied, so leakage-prone types
+  nothing graphs (Named Credentials, Static Resources) are never bundled.
+
+> **Confidential.** A bundle holds real page bodies and Salesforce source. The output
+> directory and its `.zip` are gitignored — keep them local, never commit or egress.
+
+## Agent classification (read-cold)
+The deterministic `join` links pages to SF nodes by URL/title. For deeper, *verified*
+classification — what a page is actually about, which objects/process it documents — an
+on-prem **agent reads each page and decides**, using the methods we expose. The LLM lives
+in the agent; the library stays deterministic.
+
+```python
+from graphbuilder import load_graph, save_graph, find_nodes, node_text
+from graphbuilder.confluence import apply_classifications
+
+g = load_graph("knowledge-base/graph.json")
+verdicts = []
+for page in [n for n in g["nodes"] if n["type"] == "page"]:
+    text = node_text(page, root="knowledge-base")          # read the content pointer
+    # ...the agent reads `text`, names entities, and resolves them, e.g.
+    #   find_nodes(g, "the Billing object", types=["object"]) -> object/Billing__c
+    verdicts.append({"page_id": page["id"], "process_type": "order-to-cash",
+                     "documents": [{"target": "object/Billing__c",
+                                    "confidence": "high", "evidence": "…quote…"}]})
+g, report = apply_classifications(g, verdicts)              # validated, non-mutating
+save_graph(g, "knowledge-base/graph.json")
+```
+
+- `find_nodes(graph, query, types=…)` resolves a name found in text → node id(s)
+  (ranked, fuzzy, stdlib-only); `node_text(node, root)` reads a node's content.
+- `apply_classifications` writes `documents` edges with **provenance** — `via`
+  (`agent`/`url`/`title`) + `confidence` + `evidence` — so every link is auditable. An
+  agent verdict supersedes a syntactic edge for the same pair; an unknown id is skipped
+  and reported, never fabricated. `scripts/classify_apply.py` applies an agent-produced
+  `verdicts.json` deterministically.
+
+## Parallelism
+- **Collector** fetches multiple spaces concurrently (`--max-workers`, default
+  `min(8, n_spaces)`); pagination within a space stays sequential. I/O-bound → a real
+  speedup. Output is keyed by page id, so order never changes the result.
+- **Bundle** `--parallel` overlaps the (parser-free) Confluence build with the Salesforce
+  build. The Apex tree-sitter parser is *unsendable* (pinned to its origin thread), so the
+  SF build stays on the main thread and only Confluence is offloaded; the merge order is
+  fixed, so the graph is identical to a serial build. True multi-core CPU parallelism
+  (per-file multiprocessing) is deferred.

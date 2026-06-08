@@ -14,6 +14,7 @@ from .extractors import build_graph, build_file, all_extractors
 from .core import GraphBuilder, node, raw_edge, Extractor, Resolver
 from .model import traverse, subgraph, neighborhood, find_cycles, NODE_TYPES, EDGE_TYPES
 from .persistence import save_graph, load_graph, to_json, from_json
+from .analyze import find_nodes, node_text
 
 __all__ = [
     "salesforce", "omnistudio", "model", "core", "resolvers", "analyze", "persistence",
@@ -21,4 +22,5 @@ __all__ = [
     "GraphBuilder", "node", "raw_edge", "Extractor", "Resolver",
     "traverse", "subgraph", "neighborhood", "find_cycles", "NODE_TYPES", "EDGE_TYPES",
     "save_graph", "load_graph", "to_json", "from_json",
+    "find_nodes", "node_text",
 ]

@@ -4,6 +4,7 @@ examples/
 force-app/
 obsidian-vault/
 confluence-dump/
+knowledge-base/
 *.zip
 *.sqlite
 *.page.json

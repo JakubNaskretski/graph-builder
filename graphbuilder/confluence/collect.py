@@ -30,6 +30,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # One GET per listing page returns everything the extractor needs: storage body,
@@ -93,9 +94,14 @@ def _get_json(opener, url, headers, timeout, sleep, retries=3):
     raise last  # pragma: no cover - loop always returns or raises above
 
 
-def _collect_space(opener, base, space, out_dir, headers, per_page, timeout, sleep, summary):
-    """Page through one space, writing each page dump. Returns count written."""
+def _collect_space(opener, base, space, out_dir, headers, per_page, timeout, sleep):
+    """Page through one space, writing each page dump. Returns ``(written, skipped,
+    errors)`` — its own lists, so spaces can run on separate threads with no shared
+    mutable state. Pagination stays sequential (the next ``start`` needs the prior
+    response)."""
     start = written = requests_made = 0
+    skipped: list = []
+    errors: list = []
     space_dir = out_dir / _safe(space)
     while requests_made < _MAX_REQUESTS:
         requests_made += 1
@@ -106,8 +112,7 @@ def _collect_space(opener, base, space, out_dir, headers, per_page, timeout, sle
         try:
             payload = _get_json(opener, f"{base}/rest/api/content?{q}", headers, timeout, sleep)
         except Exception as exc:  # can't page further in this space — report, move on
-            summary["errors"].append(
-                {"space": space, "start": start, "error": f"{type(exc).__name__}: {exc}"})
+            errors.append({"space": space, "start": start, "error": f"{type(exc).__name__}: {exc}"})
             break
         results = payload.get("results") or []
         if not results:
@@ -115,7 +120,7 @@ def _collect_space(opener, base, space, out_dir, headers, per_page, timeout, sle
         for page in results:
             pid = str((page or {}).get("id") or "")
             if not pid:
-                summary["skipped"].append({"space": space, "reason": "page with no id"})
+                skipped.append({"space": space, "reason": "page with no id"})
                 continue
             try:
                 space_dir.mkdir(parents=True, exist_ok=True)
@@ -123,24 +128,26 @@ def _collect_space(opener, base, space, out_dir, headers, per_page, timeout, sle
                     json.dumps(page, ensure_ascii=False, indent=2), encoding="utf-8")
                 written += 1
             except Exception as exc:
-                summary["skipped"].append(
-                    {"space": space, "id": pid, "error": f"{type(exc).__name__}: {exc}"})
+                skipped.append({"space": space, "id": pid, "error": f"{type(exc).__name__}: {exc}"})
         limit = payload.get("limit") or per_page
         start += len(results)
         if len(results) < limit:  # last page
             break
-    return written
+    return written, skipped, errors
 
 
 def collect(base_url, space_keys, out_dir, *, token=None, per_page=_PER_PAGE,
-            insecure=False, opener=None, timeout=30, sleep=time.sleep) -> dict:
+            insecure=False, opener=None, timeout=30, sleep=time.sleep, max_workers=None) -> dict:
     """Collect Confluence page(s) for ``space_keys`` into ``out_dir``.
 
     ``base_url`` is the instance root (e.g. ``https://wiki.example.internal``);
     ``space_keys`` a key or iterable of keys. ``token`` defaults to
     ``$CONFLUENCE_TOKEN`` (never pass a real token as a positional/CLI value).
-    Returns a summary ``{"spaces": {key: count}, "pages": N, "skipped": [...],
-    "errors": [...]}`` — and never logs the token or page content.
+    ``max_workers`` runs multiple spaces concurrently (default ``min(8, n_spaces)``);
+    pagination within a space stays sequential. Output files are keyed by page id, so
+    concurrency never changes the result. Returns a summary ``{"spaces": {key: count},
+    "pages": N, "skipped": [...], "errors": [...]}`` — and never logs the token or
+    page content.
     """
     token = token if token is not None else os.environ.get(_TOKEN_ENV, "")
     if not token:
@@ -150,17 +157,26 @@ def collect(base_url, space_keys, out_dir, *, token=None, per_page=_PER_PAGE,
     base = str(base_url).rstrip("/")
     if isinstance(space_keys, str):
         space_keys = [space_keys]
+    spaces = [s for s in (str(s).strip() for s in space_keys) if s]
     opener = opener or _opener(insecure)
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     out_dir = Path(out_dir)
 
+    def _run(space):
+        return _collect_space(opener, base, space, out_dir, headers, per_page, timeout, sleep)
+
+    workers = max_workers if max_workers else min(8, max(1, len(spaces)))
+    if workers > 1 and len(spaces) > 1:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {s: ex.submit(_run, s) for s in spaces}
+            results = [(s, futures[s].result()) for s in spaces]   # gather in space order
+    else:
+        results = [(s, _run(s)) for s in spaces]
+
     summary = {"spaces": {}, "pages": 0, "skipped": [], "errors": []}
-    for space in space_keys:
-        space = str(space).strip()
-        if not space:
-            continue
-        written = _collect_space(
-            opener, base, space, out_dir, headers, per_page, timeout, sleep, summary)
+    for space, (written, skipped, errors) in results:
         summary["spaces"][space] = written
         summary["pages"] += written
+        summary["skipped"].extend(skipped)
+        summary["errors"].extend(errors)
     return summary
