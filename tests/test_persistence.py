@@ -67,3 +67,48 @@ def test_load_tolerates_bare_and_partial():
 
 def test_none_graph_serialises_empty():
     assert from_json(to_json(None)) == {"nodes": [], "edges": [], "unresolved": [], "errors": []}
+
+
+# --- inline-text redaction (confidentiality) -------------------------------- #
+_PAGE_GRAPH = {
+    "nodes": [
+        {"id": "page/ENG/Billing", "type": "page", "label": "Billing",
+         "text": "secret body text", "space_key": "ENG"},
+        {"id": "object/Account", "type": "object", "label": "Account"},
+    ],
+    "edges": [], "unresolved": [], "errors": [],
+}
+
+
+def test_text_preserved_by_default():
+    # the library primitive stays faithful: round-trip keeps the body
+    restored = from_json(to_json(_PAGE_GRAPH))
+    page = next(n for n in restored["nodes"] if n["id"] == "page/ENG/Billing")
+    assert page["text"] == "secret body text" and "text_redacted" not in page
+
+
+def test_redact_text_drops_body_and_flags_it():
+    data = json.loads(to_json(_PAGE_GRAPH, redact_text=True))
+    page = next(n for n in data["nodes"] if n["id"] == "page/ENG/Billing")
+    assert "text" not in page and page["text_redacted"] is True
+    assert page["space_key"] == "ENG"                      # other attrs survive
+
+
+def test_redact_leaves_textless_nodes_untouched():
+    data = json.loads(to_json(_PAGE_GRAPH, redact_text=True))
+    obj = next(n for n in data["nodes"] if n["id"] == "object/Account")
+    assert "text_redacted" not in obj
+
+
+def test_redact_does_not_mutate_input():
+    to_json(_PAGE_GRAPH, redact_text=True)
+    page = next(n for n in _PAGE_GRAPH["nodes"] if n["id"] == "page/ENG/Billing")
+    assert page["text"] == "secret body text" and "text_redacted" not in page
+
+
+def test_save_graph_redacts_when_asked(tmp_path):
+    out = tmp_path / "graph.json"
+    save_graph(_PAGE_GRAPH, out, redact_text=True)
+    assert "secret body text" not in out.read_text(encoding="utf-8")
+    page = next(n for n in load_graph(out)["nodes"] if n["id"] == "page/ENG/Billing")
+    assert page.get("text_redacted") is True and "text" not in page

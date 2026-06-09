@@ -17,7 +17,9 @@ one missing the optional ``unresolved`` / ``errors`` keys, still loads.
 
 Confidentiality: this layer only serialises what is already in the graph (names
 and structure, never field/record values). Node ids are org-derived, so keep any
-file built from a real org out of the repo.
+file built from a real org out of the repo. The one value a node can carry is a
+Confluence page's inline ``text`` body; pass ``redact_text=True`` to drop it from
+the output (the CLI does this by default) so a plain build can't spill bodies.
 """
 from __future__ import annotations
 
@@ -27,14 +29,33 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 _GRAPH_KEYS = ("nodes", "edges", "unresolved", "errors")
 
+# The one node attribute that holds free text rather than a name/structure: a
+# Confluence page body, inlined by the extractor. Redactable on serialisation.
+_INLINE_TEXT_ATTR = "text"
 
-def to_jsonable(graph) -> dict:
+
+def _redact_node(n: dict) -> dict:
+    """Return a copy of ``n`` with the inline body text dropped, flagged by
+    ``text_redacted`` so a redacted page is distinguishable from a body-less one.
+    Nodes carrying no inline text pass through unchanged (no copy)."""
+    if not n.get(_INLINE_TEXT_ATTR):
+        return n
+    out = {k: v for k, v in n.items() if k != _INLINE_TEXT_ATTR}
+    out["text_redacted"] = True
+    return out
+
+
+def to_jsonable(graph, redact_text: bool = False) -> dict:
     """Normalise ``graph`` to the versioned, deterministically-ordered dict that
     gets written to disk. Missing optional keys default to empty lists. Never
-    mutates the input."""
+    mutates the input. With ``redact_text``, drop each node's inline ``text`` body
+    (Confluence pages) so confidential page text never reaches the file."""
     graph = graph or {}
+    raw_nodes = (n for n in graph.get("nodes", []) or [] if isinstance(n, dict))
+    if redact_text:
+        raw_nodes = (_redact_node(n) for n in raw_nodes)
     nodes = sorted(
-        (n for n in graph.get("nodes", []) or [] if isinstance(n, dict)),
+        raw_nodes,
         key=lambda n: str(n.get("id", "")),
     )
     edges = sorted(
@@ -50,9 +71,13 @@ def to_jsonable(graph) -> dict:
     }
 
 
-def to_json(graph, indent: int = 2) -> str:
-    """Serialise ``graph`` to a JSON string (deterministic ordering)."""
-    return json.dumps(to_jsonable(graph), indent=indent, sort_keys=True, ensure_ascii=False)
+def to_json(graph, indent: int = 2, redact_text: bool = False) -> str:
+    """Serialise ``graph`` to a JSON string (deterministic ordering). With
+    ``redact_text``, inline page bodies are dropped (see :func:`to_jsonable`)."""
+    return json.dumps(
+        to_jsonable(graph, redact_text=redact_text),
+        indent=indent, sort_keys=True, ensure_ascii=False,
+    )
 
 
 def from_json(text: str) -> dict:
@@ -66,11 +91,12 @@ def from_json(text: str) -> dict:
     return {k: list(data.get(k, []) or []) for k in _GRAPH_KEYS}
 
 
-def save_graph(graph, path) -> Path:
-    """Write ``graph`` to ``path`` as JSON (creating parent dirs). Returns the Path."""
+def save_graph(graph, path, redact_text: bool = False) -> Path:
+    """Write ``graph`` to ``path`` as JSON (creating parent dirs). Returns the Path.
+    With ``redact_text``, inline page bodies are dropped (see :func:`to_jsonable`)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(to_json(graph), encoding="utf-8")
+    path.write_text(to_json(graph, redact_text=redact_text), encoding="utf-8")
     return path
 
 

@@ -8,6 +8,10 @@ knowledge-base/
 *.zip
 *.sqlite
 *.page.json
+# Built graphs — org-derived ids (and, un-redacted, Confluence bodies). Backstop
+# behind the CLI's default text redaction; covers the canonical `-o graph.json`.
+graph.json
+*.graph.json
 
 # Local-only docs and tool settings
 *.local.md

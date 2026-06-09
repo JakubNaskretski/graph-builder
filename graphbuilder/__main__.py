@@ -15,6 +15,10 @@ With no ``-o`` the JSON is written to stdout. A short summary (node/edge/
 unresolved/error counts) is always printed to stderr so a redirected stdout stays
 clean. Building never raises: unhandled files are skipped and per-extractor
 failures land in the graph's ``errors`` list (reflected in the summary).
+
+By default the output is **redacted**: Confluence page bodies (the one free-text
+value a node can carry) are dropped so a plain dump can't spill page text. Pass
+``--with-text`` to keep them inline.
 """
 from __future__ import annotations
 
@@ -54,6 +58,11 @@ def main(argv=None) -> int:
         help="single-file digest: force-app root for full cross-file resolution "
              "context (edges resolve to real nodes, not stubs).",
     )
+    parser.add_argument(
+        "--with-text", action="store_true",
+        help="keep inline Confluence page body text in the output (default: "
+             "redact it — bodies are the one free-text value a node can carry).",
+    )
     args = parser.parse_args(argv)
 
     if Path(args.path).is_file():
@@ -62,10 +71,11 @@ def main(argv=None) -> int:
     else:
         graph = build_graph(args.path)
 
+    redact = not args.with_text
     if args.out:
-        save_graph(graph, args.out)
+        save_graph(graph, args.out, redact_text=redact)
     else:
-        sys.stdout.write(to_json(graph) + "\n")
+        sys.stdout.write(to_json(graph, redact_text=redact) + "\n")
 
     summary = graph_summary(graph)
     print(
