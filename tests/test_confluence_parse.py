@@ -95,3 +95,31 @@ def test_parse_page_non_dict_returns_empty(tmp_path):
     f = tmp_path / "x.page.json"
     f.write_text("[]", "utf-8")
     assert parse_page(f) == CPage()
+
+
+def test_username_mention_fallback_older_dc():
+    # older Data Center exports carry ri:username instead of ri:userkey
+    s = '<ri:user ri:username="jdoe"/> <ri:user ri:userkey="u-k" ri:username="ignored"/>'
+    assert iter_user_mentions(s) == ["jdoe", "u-k"]   # userkey still wins when both present
+
+
+CDATA_STORAGE = (
+    '<p>Real link <ac:link><ri:page ri:content-title="Real Page"/></ac:link>.</p>'
+    '<ac:structured-macro ac:name="code"><ac:plain-text-body><![CDATA['
+    'example: <ri:page ri:content-title="Fake Page"/> '
+    '<a href="https://x.lightning.force.com/lightning/o/Fake__c/list">x</a> CODEMARKER'
+    ']]></ac:plain-text-body></ac:structured-macro>'
+)
+
+
+def test_cdata_content_not_scanned_for_references(tmp_path):
+    """Example markup inside a code macro's CDATA must produce no reference —
+    but the code text itself stays in body_text (it IS page content)."""
+    p = tmp_path / "7.page.json"
+    p.write_text(json.dumps({"id": "7", "title": "Code Doc", "space": {"key": "ENG"},
+                             "body": {"storage": {"value": CDATA_STORAGE}}}), "utf-8")
+    cp = parse_page(p)
+    assert ("Real Page", "") in cp.links
+    assert not any(t == "Fake Page" for t, _ in cp.links)    # CDATA example skipped
+    assert not any("Fake__c" in u for u in cp.urls)          # CDATA URL skipped
+    assert "CODEMARKER" in cp.body_text                      # code kept as text

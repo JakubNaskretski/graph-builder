@@ -59,13 +59,30 @@ _CONTENT_TITLE = re.compile(r'ri:content-title\s*=\s*"([^"]*)"', re.I)
 _SPACE_KEY = re.compile(r'ri:space-key\s*=\s*"([^"]*)"', re.I)
 _FILENAME = re.compile(r'ri:filename\s*=\s*"([^"]*)"', re.I)
 _USERKEY = re.compile(r'ri:userkey\s*=\s*"([^"]*)"', re.I)
+_USERNAME = re.compile(r'ri:username\s*=\s*"([^"]*)"', re.I)
 _ACCOUNTID = re.compile(r'ri:account-id\s*=\s*"([^"]*)"', re.I)
 _HREF = re.compile(r'href\s*=\s*"([^"]*)"', re.I)
 _RI_URL = re.compile(r'<ri:url\b[^>]*?ri:value\s*=\s*"([^"]*)"', re.I)
 
 _CDATA = re.compile(r"<!\[CDATA\[|\]\]>")
+_CDATA_BLOCK = re.compile(r"<!\[CDATA\[.*?\]\]>", re.S)
 _TAG = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
+
+
+def slug(s: str) -> str:
+    """Collapse path separators so a space key / title / filename is safe inside a
+    ``type/name`` id (the name segment must not introduce stray ``/`` hops).
+    Applied identically when naming a node and when naming a reference target, so
+    the two always match."""
+    return (s or "").replace("/", "_").replace("\\", "_").strip()
+
+
+def page_ref(space: str, title: str) -> str:
+    """The ``<space>/<title>`` name segment a storage-format reference carries for
+    a page. Page NODES are id-keyed (``page/<pageId>``); this title form is how
+    links *name* their target, and the page resolver maps it back to the id."""
+    return f"{slug(space)}/{slug(title)}"
 
 
 def _attr(attrs: str, pat: re.Pattern) -> str:
@@ -99,10 +116,12 @@ def iter_attachment_refs(storage: str) -> list:
 
 def iter_user_mentions(storage: str) -> list:
     """User keys of every ``<ri:user>`` mention (``ri:userkey`` on Data Center,
-    falling back to ``ri:account-id``); skips ones with neither."""
+    falling back to ``ri:username`` on older DC, then ``ri:account-id``); skips
+    ones with none of the three."""
     out = []
     for m in _RI_USER.finditer(storage or ""):
-        key = _attr(m.group(1), _USERKEY) or _attr(m.group(1), _ACCOUNTID)
+        key = (_attr(m.group(1), _USERKEY) or _attr(m.group(1), _USERNAME)
+               or _attr(m.group(1), _ACCOUNTID))
         if key:
             out.append(key)
     return out
@@ -158,6 +177,10 @@ def parse_page(path) -> CPage:
         return CPage()
 
     storage = _dig(data, "body", "storage", "value") or ""
+    # Code/noformat macros wrap their content in CDATA; example markup or URLs in
+    # there are NOT real references, so the reference scanners see the body with
+    # CDATA blocks removed. body_text keeps the code (it IS page content).
+    scan_src = _CDATA_BLOCK.sub(" ", storage)
 
     ancestors = [
         (str(a.get("id")), str(a.get("title") or ""))
@@ -199,9 +222,9 @@ def parse_page(path) -> CPage:
         author=str(author or ""),
         version=version,
         url=str(url or ""),
-        links=iter_page_links(storage),
-        attachments=iter_attachment_refs(storage),
-        mentions=iter_user_mentions(storage),
-        urls=iter_external_urls(storage),
+        links=iter_page_links(scan_src),
+        attachments=iter_attachment_refs(scan_src),
+        mentions=iter_user_mentions(scan_src),
+        urls=iter_external_urls(scan_src),
         body_text=body_text(storage),
     )

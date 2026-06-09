@@ -7,32 +7,22 @@ users, wired by ``child-of`` / ``links-to`` / ``attaches`` / ``labeled`` /
 emits Salesforce edges; wiring pages to the SF nodes they document is the
 deliberate :func:`graphbuilder.confluence.join` step.
 
-Node ids: ``space/<KEY>`` · ``page/<KEY>/<title>`` ·
-``attachment/<KEY>/<title>/<filename>`` · ``confluencelabel/<name>`` ·
-``confluenceuser/<key>``. Pages are addressed by (space, title) because that is how
-storage-format links reference them (``<ri:page ri:content-title ri:space-key>``),
-so a ``links-to`` edge resolves to the real page node when its dump is present, or
-to an external stub when it is not — exactly like a Salesforce cross-file reference.
+Node ids: ``space/<KEY>`` · ``page/<pageId>`` · ``attachment/<pageId>/<filename>``
+· ``confluencelabel/<name>`` · ``confluenceuser/<key>``. Pages are **id-keyed**
+(the REST page id is stable across renames and unique across spaces; the title is
+the node ``label``), but storage-format links can only name their target as
+(space, title) (``<ri:page ri:content-title ri:space-key>``), so ``links-to`` /
+``child-of`` raw edges carry that title form and
+:class:`graphbuilder.resolvers.PageResolver` maps it back to the id-keyed node —
+or to a title-keyed external stub when the target page was never collected,
+exactly like a Salesforce cross-file reference.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from ..confluence.parse import parse_page
+from ..confluence.parse import page_ref, parse_page, slug
 from ..core import node, raw_edge
-
-
-def _slug(s: str) -> str:
-    """Collapse path separators so a title/filename is safe inside a ``type/name``
-    id (the name segment must not introduce stray ``/`` hops). Applied identically
-    when building a node id and when naming a link target, so the two always match."""
-    return (s or "").replace("/", "_").replace("\\", "_").strip()
-
-
-def _page_name(space: str, title: str) -> str:
-    """The ``<space>/<title>`` name segment shared by a page node id and any
-    ``links-to`` / ``child-of`` edge that targets it."""
-    return f"{_slug(space)}/{_slug(title)}"
 
 
 class ConfluenceExtractor:
@@ -43,10 +33,13 @@ class ConfluenceExtractor:
 
     def extract(self, path: Path):
         p = parse_page(path)
-        space = _slug(p.space_key) or "_"
+        space = slug(p.space_key) or "_"
         title = p.title or p.id or path.stem
-        page_name = _page_name(p.space_key or space, title)
-        pid = f"page/{page_name}"
+        page_name = page_ref(p.space_key or space, title)
+        # id-keyed identity (stable across renames); title form only as a fallback
+        # for a degenerate dump that carries no id.
+        id_key = slug(p.id) or page_name
+        pid = f"page/{id_key}"
 
         # --- page node (structure + the deliberate body-text content capture) ---
         attrs = {"source": "confluence"}
@@ -65,7 +58,7 @@ class ConfluenceExtractor:
         nodes = [node(pid, "page", title, **attrs)]
 
         # space node + child-of (parent page if any, else the space)
-        sid = f"space/{_slug(p.space_key or space)}"
+        sid = f"space/{slug(p.space_key or space)}"
         nodes.append(node(sid, "space", p.space_key or space, source="confluence"))
 
         edges: list[dict] = []
@@ -81,20 +74,21 @@ class ConfluenceExtractor:
             edges.append(raw_edge(pid, etype, to_kind, to_name))
 
         if p.parent_title:
-            add_edge("child-of", "page", _page_name(p.space_key or space, p.parent_title))
+            add_edge("child-of", "page", page_ref(p.space_key or space, p.parent_title))
         else:
-            add_edge("child-of", "space", _slug(p.space_key or space))
+            add_edge("child-of", "space", slug(p.space_key or space))
 
         # page -> page links (default to this page's space when the link omits one);
         # skip a self-link.
         for link_title, link_space in p.links:
-            target = _page_name(link_space or p.space_key or space, link_title)
+            target = page_ref(link_space or p.space_key or space, link_title)
             if target != page_name:
                 add_edge("links-to", "page", target)
 
-        # attachments — emit the node (real, with its filename label) + the edge
+        # attachments — emit the node (real, with its filename label) + the edge;
+        # keyed by the owning page's id so a page rename never re-keys them.
         for fn in dict.fromkeys(p.attachments):  # de-dup, preserve order
-            a_name = f"{_page_name(p.space_key or space, title)}/{_slug(fn)}"
+            a_name = f"{id_key}/{slug(fn)}"
             nodes.append(node(f"attachment/{a_name}", "attachment", fn, source="confluence"))
             add_edge("attaches", "attachment", a_name)
 
