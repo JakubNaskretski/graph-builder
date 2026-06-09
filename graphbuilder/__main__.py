@@ -1,4 +1,6 @@
-"""Command-line entry point: build a metadata graph and save it as JSON.
+"""Command-line entry point — build a metadata graph, or run the whole pipeline.
+
+Build mode (the original CLI)::
 
     python -m graphbuilder <force-app-dir> [-o graph.json]
     graph-builder <force-app-dir> [-o graph.json]      # via the console script
@@ -19,10 +21,29 @@ failures land in the graph's ``errors`` list (reflected in the summary).
 By default the output is **redacted**: Confluence page bodies (the one free-text
 value a node can carry) are dropped so a plain dump can't spill page text. Pass
 ``--with-text`` to keep them inline.
+
+Pipeline mode — every stage behind ONE command (made for wrapping as an agent
+skill)::
+
+    graph-builder pipeline --salesforce force-app --confluence-dump dump --out kb
+    graph-builder pipeline --config pipeline.json
+
+Runs (optional) Confluence collect -> per-source builds -> Confluence->SF join ->
+knowledge-base bundle, producing ``<out>/{manifest.json, graph.json, content/}``
++ zip. ``--config`` reads the same options from a JSON file (explicit flags win),
+so a recurring KB refresh is one command + one config. ``--collect`` needs
+``--base-url``, ``--spaces`` and ``$CONFLUENCE_TOKEN`` (the token is only ever
+read from the environment).
+
+Exit codes (both modes): ``0`` clean · ``1`` fatal (bad input/setup) · ``2``
+usage · ``3`` finished, but the run recorded errors (build ``errors``, collect
+failures, or an incomplete space listing) — output is still written, so agent
+harnesses can key off the code without losing the artifact.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -30,11 +51,16 @@ from . import build_graph, build_file
 from .analyze import graph_summary
 from .persistence import save_graph, to_json
 
+EXIT_OK = 0
+EXIT_FATAL = 1
+EXIT_ERRORS_RECORDED = 3
 
-def main(argv=None) -> int:
+
+def _build_cli(argv) -> int:
     parser = argparse.ArgumentParser(
         prog="graph-builder",
-        description="Build a Salesforce force-app metadata graph and emit it as JSON.",
+        description="Build a Salesforce force-app metadata graph and emit it as JSON. "
+                    "(See `graph-builder pipeline -h` for the all-stages mode.)",
     )
     parser.add_argument(
         "path", help="a force-app directory to scan, or a single metadata file to digest",
@@ -78,15 +104,122 @@ def main(argv=None) -> int:
         sys.stdout.write(to_json(graph, redact_text=redact) + "\n")
 
     summary = graph_summary(graph)
+    n_errors = len(graph.get("errors", []))
     print(
         f"nodes={sum(summary['node_counts'].values())} "
         f"edges={sum(summary['edge_counts'].values())} "
         f"unresolved={len(graph.get('unresolved', []))} "
-        f"errors={len(graph.get('errors', []))}"
+        f"errors={n_errors}"
         + (f"  ->  {args.out}" if args.out else ""),
         file=sys.stderr,
     )
-    return 0
+    return EXIT_ERRORS_RECORDED if n_errors else EXIT_OK
+
+
+# --------------------------------------------------------------------------- #
+# pipeline mode
+# --------------------------------------------------------------------------- #
+def _load_config(path) -> dict:
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("pipeline config must be a JSON object")
+    return data
+
+
+def _pipeline_cli(argv) -> int:
+    parser = argparse.ArgumentParser(
+        prog="graph-builder pipeline",
+        description="Run the whole knowledge-base pipeline behind one command: "
+                    "(optional) Confluence collect -> builds -> join -> bundle.",
+    )
+    parser.add_argument("--config", default=None,
+                        help="JSON file holding any of these options (flags win)")
+    parser.add_argument("--salesforce", default=None, help="force-app directory")
+    parser.add_argument("--confluence-dump", default=None,
+                        help="Confluence dump dir (collect target / build input)")
+    parser.add_argument("--collect", action="store_true", default=None,
+                        help="refresh the dump from Confluence first "
+                             "(needs --base-url, --spaces, $CONFLUENCE_TOKEN)")
+    parser.add_argument("--base-url", default=None, help="Confluence instance root URL")
+    parser.add_argument("--spaces", default=None,
+                        help="comma-separated Confluence space keys to collect")
+    parser.add_argument("--insecure", action="store_true", default=None,
+                        help="skip TLS verification (self-signed on-prem certs)")
+    parser.add_argument("--no-prune", dest="prune", action="store_false", default=None,
+                        help="keep dump files for pages a complete listing no longer returns")
+    parser.add_argument("--out", default=None, help="bundle output directory (default: kb)")
+    parser.add_argument("--no-zip", dest="zip", action="store_false", default=None,
+                        help="skip writing the bundle zip next to --out")
+    args = parser.parse_args(argv)
+
+    cfg = _load_config(args.config) if args.config else {}
+    # explicit flags win over the config file; config fills the rest
+    opt = {k: v for k, v in vars(args).items() if k != "config" and v is not None}
+    merged = {**cfg, **opt}
+
+    salesforce = merged.get("salesforce")
+    dump = merged.get("confluence_dump")
+    if not salesforce and not dump:
+        print("pipeline: nothing to do — give --salesforce and/or --confluence-dump "
+              "(or set them in --config)", file=sys.stderr)
+        return EXIT_FATAL
+
+    recorded_errors = 0
+
+    if merged.get("collect"):
+        if not dump:
+            print("pipeline: --collect needs --confluence-dump as its target", file=sys.stderr)
+            return EXIT_FATAL
+        spaces = merged.get("spaces") or []
+        if isinstance(spaces, str):
+            spaces = [s.strip() for s in spaces.split(",") if s.strip()]
+        from .confluence.collect import CollectError, collect
+        try:
+            summary = collect(
+                merged.get("base_url"), spaces, dump,
+                insecure=bool(merged.get("insecure")),
+                prune=merged.get("prune", True),
+            )
+        except CollectError as exc:
+            print(f"pipeline: collect failed: {exc}", file=sys.stderr)
+            return EXIT_FATAL
+        recorded_errors += len(summary["errors"])
+        print(
+            f"collect: pages={summary['pages']} unchanged={summary['unchanged']} "
+            f"pruned={len(summary['pruned'])} errors={len(summary['errors'])}"
+            + (f" INCOMPLETE={','.join(summary['incomplete'])}" if summary["incomplete"] else ""),
+            file=sys.stderr,
+        )
+        if summary["incomplete"]:
+            recorded_errors += len(summary["incomplete"])
+
+    from .bundle import build_bundle
+    try:
+        result = build_bundle(
+            merged.get("out") or "kb",
+            salesforce=salesforce,
+            confluence_dump=dump,
+            zip_path=None if merged.get("zip", True) else False,
+        )
+    except ValueError as exc:
+        print(f"pipeline: {exc}", file=sys.stderr)
+        return EXIT_FATAL
+    g = result["manifest"]["graph"]
+    recorded_errors += g["errors"]
+    print(
+        f"bundle: nodes={g['nodes']} edges={g['edges']} documents={g['documents_edges']} "
+        f"unresolved={g['unresolved']} errors={g['errors']}  ->  {result['out_dir']}"
+        + (f" (+ {result['zip']})" if result["zip"] else ""),
+        file=sys.stderr,
+    )
+    return EXIT_ERRORS_RECORDED if recorded_errors else EXIT_OK
+
+
+def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "pipeline":
+        return _pipeline_cli(argv[1:])
+    return _build_cli(argv)
 
 
 if __name__ == "__main__":

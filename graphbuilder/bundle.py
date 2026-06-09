@@ -275,6 +275,8 @@ def build_bundle(out_dir, *, salesforce=None, confluence_dump=None, zip_path=Non
             "nodes": len(graph["nodes"]),
             "edges": len(graph["edges"]),
             "documents_edges": sum(1 for e in graph["edges"] if e.get("type") == "documents"),
+            "unresolved": len(graph.get("unresolved", [])),
+            "errors": len(graph.get("errors", [])),
         },
         "content_format": {"confluence": ["txt", "xhtml"], "salesforce": ["source"]},
         "notice": "Contains page bodies and Salesforce source. Keep local; do not commit or egress.",
