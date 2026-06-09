@@ -25,14 +25,12 @@ from __future__ import annotations
 
 import json
 import os
-import re
-import ssl
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+from ..collectutil import build_opener, get_json, mark_incomplete, prune_dir, safe_segment
 
 # One GET per listing page returns everything the extractor needs: storage body,
 # hierarchy, space, version+author, labels.
@@ -41,64 +39,12 @@ _TOKEN_ENV = "CONFLUENCE_TOKEN"
 _PER_PAGE = 50           # REST ``limit`` per request
 _MAX_REQUESTS = 10_000   # hard cap on pagination requests per space (loop-safety)
 _CONTENT_TYPES = ("page", "blogpost")   # blog posts share the page dump shape
-_RETRY_CODES = {429, 502, 503, 504}     # throttling + transient gateway errors
-# Sentinel marking a space dir whose last collection aborted mid-pagination, so a
-# later build/prune knows the dump may be missing pages.
-_INCOMPLETE_MARK = ".incomplete"
 
 
 class CollectError(RuntimeError):
     """A caller-fixable setup problem (missing token / base URL). Per-page and
     per-space fetch failures are NOT raised — they are skipped and reported in the
     returned summary."""
-
-
-def _opener(insecure: bool):
-    """Build a urllib opener. ``insecure=True`` disables TLS verification for
-    self-signed on-prem certs (a knowing choice — documented, opt-in)."""
-    if insecure:
-        ctx = ssl._create_unverified_context()
-        return urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
-    return urllib.request.build_opener()
-
-
-def _safe(name: str) -> str:
-    """Filesystem-safe space-dir segment (no traversal / odd chars)."""
-    return re.sub(r"[^A-Za-z0-9._-]", "_", name) or "_"
-
-
-def _retry_after(exc) -> float:
-    try:
-        val = exc.headers.get("Retry-After")
-        return float(val) if val else 0.0
-    except Exception:
-        return 0.0
-
-
-def _get_json(opener, url, headers, timeout, sleep, retries=3):
-    """GET ``url`` and parse JSON, retrying on 429/502/503/504 (honouring
-    ``Retry-After``) and transient network errors with exponential backoff.
-    Raises after ``retries``."""
-    req = urllib.request.Request(url, headers=headers, method="GET")
-    last = None
-    for attempt in range(retries + 1):
-        try:
-            resp = opener.open(req, timeout=timeout)
-            raw = resp.read()
-            return json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
-        except urllib.error.HTTPError as exc:
-            last = exc
-            if exc.code in _RETRY_CODES and attempt < retries:
-                sleep(_retry_after(exc) or (2 ** attempt))
-                continue
-            raise
-        except (urllib.error.URLError, TimeoutError) as exc:
-            last = exc
-            if attempt < retries:
-                sleep(2 ** attempt)
-                continue
-            raise
-    raise last  # pragma: no cover - loop always returns or raises above
 
 
 def _version_of(payload) -> int:
@@ -135,7 +81,7 @@ def _collect_space(opener, base, space, out_dir, headers, per_page, timeout, sle
     complete = True
     skipped: list = []
     errors: list = []
-    space_dir = out_dir / _safe(space)
+    space_dir = out_dir / safe_segment(space)
     for ctype in content_types:
         start = requests_made = 0
         while requests_made < _MAX_REQUESTS:
@@ -145,7 +91,7 @@ def _collect_space(opener, base, space, out_dir, headers, per_page, timeout, sle
                 "start": start, "limit": per_page, "expand": _EXPAND,
             })
             try:
-                payload = _get_json(opener, f"{base}/rest/api/content?{q}", headers, timeout, sleep)
+                payload = get_json(opener, f"{base}/rest/api/content?{q}", headers, timeout, sleep)
             except Exception as exc:  # can't page further for this type — report, move on
                 errors.append({"space": space, "type": ctype, "start": start,
                                "error": f"{type(exc).__name__}: {exc}"})
@@ -181,27 +127,9 @@ def _collect_space(opener, base, space, out_dir, headers, per_page, timeout, sle
             "complete": complete, "skipped": skipped, "errors": errors}
 
 
-def _prune_space(space_dir: Path, seen: set) -> list:
-    """Delete dump files for ids a COMPLETE listing no longer returned —
-    deleted/moved pages would otherwise stay in the graph forever. Returns the
-    pruned ids. Only ever touches ``*.page.json`` directly inside ``space_dir``."""
-    pruned = []
-    if not space_dir.is_dir():
-        return pruned
-    for f in sorted(space_dir.glob("*.page.json")):
-        pid = f.name[: -len(".page.json")]
-        if pid not in seen:
-            try:
-                f.unlink()
-                pruned.append(pid)
-            except OSError:
-                pass
-    return pruned
-
-
 def collect(base_url, space_keys, out_dir, *, token=None, per_page=_PER_PAGE,
-            insecure=False, opener=None, timeout=30, sleep=time.sleep, max_workers=None,
-            content_types=_CONTENT_TYPES, prune=True) -> dict:
+            insecure=False, ca_bundle=None, opener=None, timeout=30, sleep=time.sleep,
+            max_workers=None, content_types=_CONTENT_TYPES, prune=True) -> dict:
     """Collect Confluence content for ``space_keys`` into ``out_dir``.
 
     ``base_url`` is the instance root (e.g. ``https://wiki.example.internal``);
@@ -209,7 +137,8 @@ def collect(base_url, space_keys, out_dir, *, token=None, per_page=_PER_PAGE,
     ``$CONFLUENCE_TOKEN`` (never pass a real token as a positional/CLI value).
     ``max_workers`` runs multiple spaces concurrently (default ``min(8, n_spaces)``);
     pagination within a space stays sequential. Output files are keyed by page id, so
-    concurrency never changes the result.
+    concurrency never changes the result. ``ca_bundle`` (a PEM path) trusts a
+    private CA with full verification — prefer it over ``insecure``.
 
     ``content_types`` selects what is collected (pages + blog posts by default —
     blog posts share the dump shape and graph as ``page`` nodes). Collection is
@@ -235,7 +164,7 @@ def collect(base_url, space_keys, out_dir, *, token=None, per_page=_PER_PAGE,
     spaces = [s for s in (str(s).strip() for s in space_keys) if s]
     if isinstance(content_types, str):
         content_types = [content_types]
-    opener = opener or _opener(insecure)
+    opener = opener or build_opener(insecure, ca_bundle)
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     out_dir = Path(out_dir)
 
@@ -259,18 +188,10 @@ def collect(base_url, space_keys, out_dir, *, token=None, per_page=_PER_PAGE,
         summary["unchanged"] += r["unchanged"]
         summary["skipped"].extend(r["skipped"])
         summary["errors"].extend(r["errors"])
-        space_dir = out_dir / _safe(space)
-        mark = space_dir / _INCOMPLETE_MARK
-        if r["complete"]:
-            if prune:
-                summary["pruned"].extend(_prune_space(space_dir, r["seen"]))
-            mark.unlink(missing_ok=True)
-        else:
+        space_dir = out_dir / safe_segment(space)
+        if r["complete"] and prune:
+            summary["pruned"].extend(prune_dir(space_dir, r["seen"], ".page.json"))
+        if not r["complete"]:
             summary["incomplete"].append(space)
-            if space_dir.is_dir():
-                try:
-                    mark.write_text("last collection aborted mid-listing; dump may be missing pages\n",
-                                    encoding="utf-8")
-                except OSError:
-                    pass
+        mark_incomplete(space_dir, r["complete"])
     return summary

@@ -38,7 +38,9 @@ def main(argv=None) -> int:
                     help="dump directory (default: confluence-dump/)")
     ap.add_argument("--per-page", type=int, default=50, help="REST page size (default: 50)")
     ap.add_argument("--insecure", action="store_true",
-                    help="disable TLS verification (self-signed on-prem certs) — a knowing choice")
+                    help="disable TLS verification — last resort; prefer --ca-bundle")
+    ap.add_argument("--ca-bundle", default=None,
+                    help="PEM file of a private CA to trust (keeps full TLS verification)")
     ap.add_argument("--max-workers", type=int, default=None,
                     help="fetch this many spaces concurrently (default: min(8, n_spaces))")
     ap.add_argument("--pages-only", action="store_true",
@@ -50,7 +52,7 @@ def main(argv=None) -> int:
     spaces = [s.strip() for s in args.space.split(",") if s.strip()]
     try:
         summary = collect(args.base_url, spaces, args.out,
-                          per_page=args.per_page, insecure=args.insecure,
+                          per_page=args.per_page, insecure=args.insecure, ca_bundle=args.ca_bundle,
                           max_workers=args.max_workers, prune=args.prune,
                           content_types=("page",) if args.pages_only else ("page", "blogpost"))
     except CollectError as exc:
