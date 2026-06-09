@@ -157,3 +157,24 @@ def test_cross_space_same_title_pages_stay_distinct(tmp_path):
                        _w(tmp_path, "OPS/2.page.json", b)]))
     ids = {n["id"] for n in g["nodes"]}
     assert {"page/1", "page/2"} <= ids
+
+
+def test_include_macro_emits_embeds_edge(tmp_path):
+    data = {"id": "300", "title": "Composite", "space": {"key": "ENG"},
+            "body": {"storage": {"value":
+                '<ac:structured-macro ac:name="include"><ac:parameter ac:name="">'
+                '<ac:link><ri:page ri:content-title="Shared Block"/></ac:link>'
+                '</ac:parameter></ac:structured-macro>'}}}
+    _, edges = EX.extract(_w(tmp_path, "300.page.json", data))
+    et = _et(edges)
+    assert ("page/300", "embeds", "page", "ENG/Shared Block") in et
+    assert ("page/300", "links-to", "page", "ENG/Shared Block") in et   # also a link
+
+
+def test_blogpost_marked_on_node(tmp_path):
+    data = {"id": "9", "type": "blogpost", "title": "News", "space": {"key": "ENG"},
+            "body": {"storage": {"value": "x"}}}
+    nodes, edges = EX.extract(_w(tmp_path, "9.page.json", data))
+    page = _ids(nodes)["page/9"]
+    assert page["type"] == "page" and page["content_type"] == "blogpost"
+    assert ("page/9", "child-of", "space", "ENG") in _et(edges)   # blog posts don't nest

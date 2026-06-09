@@ -30,9 +30,11 @@ from pathlib import Path
 
 @dataclass
 class CPage:
-    """One parsed Confluence page (envelope + storage-format references)."""
+    """One parsed Confluence content unit (envelope + storage-format references).
+    Blog posts share the exact dump shape; ``content_type`` says which it was."""
     id: str = ""
     title: str = ""
+    content_type: str = "page"                       # "page" | "blogpost"
     space_key: str = ""
     parent_id: str = ""                              # immediate parent page id ("" if top-level)
     parent_title: str = ""                           # immediate parent page title ("" if top-level)
@@ -42,6 +44,7 @@ class CPage:
     version: int = 0
     url: str = ""                                    # absolute web URL if derivable, else ""
     links: list = field(default_factory=list)        # [(title, space_key_or_empty), ...]
+    includes: list = field(default_factory=list)     # include/excerpt-include macro targets, same shape
     attachments: list = field(default_factory=list)  # filenames
     mentions: list = field(default_factory=list)     # user keys
     urls: list = field(default_factory=list)         # external href / ri:url values (for the SF join)
@@ -52,6 +55,13 @@ class CPage:
 # storage-format scanners — tolerant: a bad/odd ref is skipped, never raised
 # --------------------------------------------------------------------------- #
 _RI_PAGE = re.compile(r"<ri:page\b([^>]*)>", re.I)
+# Page-include / excerpt-include macros: their <ri:page> target is page CONTENT
+# embedded here (a transitive dependency), not just a navigational link.
+_INCLUDE_MACRO = re.compile(
+    r'<ac:structured-macro\b[^>]*ac:name\s*=\s*"(?:include|excerpt-include)"[^>]*>'
+    r"(.*?)</ac:structured-macro>",
+    re.I | re.S,
+)
 _RI_ATTACH = re.compile(r"<ri:attachment\b([^>]*)>", re.I)
 _RI_USER = re.compile(r"<ri:user\b([^>]*)>", re.I)
 
@@ -100,6 +110,16 @@ def iter_page_links(storage: str) -> list:
         title = _attr(m.group(1), _CONTENT_TITLE)
         if title:
             out.append((title, _attr(m.group(1), _SPACE_KEY)))
+    return out
+
+
+def iter_include_targets(storage: str) -> list:
+    """``[(content_title, space_key_or_empty), ...]`` for every page targeted by an
+    include / excerpt-include macro — the embedding (content) subset of
+    :func:`iter_page_links`."""
+    out = []
+    for m in _INCLUDE_MACRO.finditer(storage or ""):
+        out.extend(iter_page_links(m.group(1)))
     return out
 
 
@@ -214,6 +234,7 @@ def parse_page(path) -> CPage:
     return CPage(
         id=str(data.get("id") or ""),
         title=str(data.get("title") or ""),
+        content_type=str(data.get("type") or "page"),
         space_key=str(_dig(data, "space", "key") or ""),
         parent_id=ancestors[-1][0] if ancestors else "",
         parent_title=ancestors[-1][1] if ancestors else "",
@@ -223,6 +244,7 @@ def parse_page(path) -> CPage:
         version=version,
         url=str(url or ""),
         links=iter_page_links(scan_src),
+        includes=iter_include_targets(scan_src),
         attachments=iter_attachment_refs(scan_src),
         mentions=iter_user_mentions(scan_src),
         urls=iter_external_urls(scan_src),

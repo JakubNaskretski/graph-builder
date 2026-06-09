@@ -45,6 +45,8 @@ class ConfluenceExtractor:
         attrs = {"source": "confluence"}
         if p.id:
             attrs["page_id"] = p.id
+        if p.content_type and p.content_type != "page":
+            attrs["content_type"] = p.content_type   # e.g. a blog post (same node type)
         if p.space_key:
             attrs["space_key"] = p.space_key
         if p.version:
@@ -84,6 +86,14 @@ class ConfluenceExtractor:
             target = page_ref(link_space or p.space_key or space, link_title)
             if target != page_name:
                 add_edge("links-to", "page", target)
+
+        # include / excerpt-include macros EMBED the target page's content here —
+        # a transitive content dependency, stronger than (and emitted alongside)
+        # the links-to the same <ri:page> also produces.
+        for inc_title, inc_space in p.includes:
+            target = page_ref(inc_space or p.space_key or space, inc_title)
+            if target != page_name:
+                add_edge("embeds", "page", target)
 
         # attachments — emit the node (real, with its filename label) + the edge;
         # keyed by the owning page's id so a page rename never re-keys them.

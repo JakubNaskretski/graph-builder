@@ -123,3 +123,33 @@ def test_cdata_content_not_scanned_for_references(tmp_path):
     assert not any(t == "Fake Page" for t, _ in cp.links)    # CDATA example skipped
     assert not any("Fake__c" in u for u in cp.urls)          # CDATA URL skipped
     assert "CODEMARKER" in cp.body_text                      # code kept as text
+
+
+def test_include_macro_targets_scanned():
+    from graphbuilder.confluence.parse import iter_include_targets
+    s = (
+        '<ac:link><ri:page ri:content-title="Just A Link"/></ac:link>'
+        '<ac:structured-macro ac:name="include"><ac:parameter ac:name="">'
+        '<ac:link><ri:page ri:content-title="Embedded Page" ri:space-key="OPS"/></ac:link>'
+        '</ac:parameter></ac:structured-macro>'
+        '<ac:structured-macro ac:name="excerpt-include">'
+        '<ri:page ri:content-title="Excerpted"/></ac:structured-macro>'
+        '<ac:structured-macro ac:name="info"><ri:page ri:content-title="Not An Include"/>'
+        '</ac:structured-macro>'
+    )
+    inc = iter_include_targets(s)
+    assert ("Embedded Page", "OPS") in inc
+    assert ("Excerpted", "") in inc
+    assert not any(t == "Just A Link" for t, _ in inc)
+    assert not any(t == "Not An Include" for t, _ in inc)
+    # ...but ALL of them are still ordinary page links
+    assert {t for t, _ in iter_page_links(s)} == {
+        "Just A Link", "Embedded Page", "Excerpted", "Not An Include"}
+
+
+def test_parse_page_blogpost_content_type(tmp_path):
+    p = tmp_path / "9.page.json"
+    p.write_text(json.dumps({"id": "9", "type": "blogpost", "title": "News",
+                             "space": {"key": "ENG"},
+                             "body": {"storage": {"value": "x"}}}), "utf-8")
+    assert parse_page(p).content_type == "blogpost"
