@@ -102,6 +102,21 @@ def test_tab_custom_object_via_name_suffix(tmp_path):
                       "to_kind": "object", "to_name": "MeterPoint__c"}]
 
 
+def test_tab_custom_object_via_name_suffix_non_c(tmp_path):
+    # Packaged orgs expose tabs for external objects (__x) and other non-__c
+    # custom suffixes; the name-suffix fallback must recognize them too.
+    p = tmp_path / "vlocity_cmt__Ext__x.tab-meta.xml"
+    _w(p, f"""<?xml version="1.0" encoding="UTF-8"?>
+<CustomTab {NS}>
+  <label>External</label>
+  <motif>Custom53: Bell</motif>
+</CustomTab>
+""")
+    _, edges = AppTabExtractor().extract(p)
+    assert edges == [{"src": "tab/vlocity_cmt__Ext__x", "type": "references",
+                      "to_kind": "object", "to_name": "vlocity_cmt__Ext__x"}]
+
+
 def test_tab_lwc_component(tmp_path):
     p = tmp_path / "AcmeDashboard.tab-meta.xml"
     _w(p, f"""<?xml version="1.0" encoding="UTF-8"?>

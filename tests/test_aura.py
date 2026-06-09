@@ -188,3 +188,19 @@ def test_build_graph_in_isolation_resolves_known_kinds(tmp_path):
     for cid in ("aura/acmeReadingCard", "aura/meterPointList", "aura/acmeToast"):
         assert ids[cid].get("external") is True
     assert g["unresolved"] == []
+
+
+def test_looks_like_object_namespaced_suffixes():
+    from graphbuilder.extractors.aura import _looks_like_object
+    # standard + every custom suffix, including managed-package objects whose
+    # lowercase namespace prefix would otherwise fail the capitalization fallback
+    assert _looks_like_object("Account")
+    assert _looks_like_object("MeterPoint__c")
+    assert _looks_like_object("vlocity_cmt__Order__c")
+    assert _looks_like_object("vlocity_cmt__Event__e")
+    assert _looks_like_object("ns__Config__mdt")
+    assert _looks_like_object("ns__Ext__x")
+    assert _looks_like_object("ns__Big__b")
+    # lowercase view bindings / empty are not objects
+    assert not _looks_like_object("simpleRecord")
+    assert not _looks_like_object("")

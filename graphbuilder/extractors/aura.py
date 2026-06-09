@@ -55,12 +55,14 @@ _APEX_URI = re.compile(r"""apex://([\w.]+)""")
 
 
 def _looks_like_object(name: str) -> bool:
-    """Heuristic for an object reference: a custom object (`Foo__c`) or a
-    capitalized standard-object identifier (`Account`). Avoids field paths and
-    lowercase view bindings; skips when in doubt."""
+    """Heuristic for an object reference: a custom object of any suffix
+    (`Foo__c`, `Foo__e`, `ns__Foo__mdt`, `Foo__x`, `Foo__b`) or a capitalized
+    standard-object identifier (`Account`). Avoids field paths and lowercase view
+    bindings; skips when in doubt. The suffix check matters for managed-package
+    objects, whose lowercase namespace prefix fails the capitalization fallback."""
     if not name:
         return False
-    if name.endswith("__c") or name.endswith("__C"):
+    if name.lower().endswith(("__c", "__e", "__mdt", "__x", "__b")):
         return True
     return name[:1].isupper()
 

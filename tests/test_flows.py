@@ -272,6 +272,20 @@ def test_build_graph_resolves_and_stubs(tmp_path):
     assert all(u["to_kind"] == "emailalert" for u in g["unresolved"])
 
 
+def test_lwc_name_namespace_handling():
+    # default namespace `c` is stripped -> bare local name (keyed lwc/<name>)
+    assert flows._lwc_name("c:acmeCard") == "acmeCard"
+    assert flows._lwc_name("c__acmeCard") == "acmeCard"
+    assert flows._lwc_name("acmeCard") == "acmeCard"
+    # a real managed-package namespace is preserved in API form so the edge
+    # targets the packaged component instead of colliding with a local one
+    assert flows._lwc_name("vlocity_cmt:flexCard") == "vlocity_cmt__flexCard"
+    assert flows._lwc_name("vlocity_cmt__flexCard") == "vlocity_cmt__flexCard"
+    # junk tokens still rejected
+    assert flows._lwc_name("a b") is None
+    assert flows._lwc_name("c:") is None
+
+
 def test_broken_xml_does_not_raise(tmp_path):
     # malformed XML must not raise; base node still emitted from the filename
     p = _write_flow(tmp_path, "Acme_Broken", "<Flow><not closed")
