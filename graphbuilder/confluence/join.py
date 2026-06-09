@@ -10,7 +10,8 @@ graph. :func:`merge` unions both graphs plus chosen cross-edges into one
 
 Matching is conservative by default:
   - ``scan_urls`` (high)   — Salesforce Lightning URLs in the page body name an
-    object directly (``/lightning/o/<Object>/``, ``/lightning/r/<Object>/...``).
+    entity directly (``/lightning/o/<Object>/``, ``/lightning/r/<Object>/...``,
+    ``/lightning/n/<TabName>``, ``/lightning/setup/ObjectManager/<Object>/...``).
   - ``match_titles`` (medium) — page title exactly equals an SF node label/name.
   - ``match_labels`` (low, OFF) — a page label exactly equals an SF node label.
   - ``scan_body`` (medium, OFF) — distinctive ``*__c``-style API names in the body
@@ -23,10 +24,15 @@ from __future__ import annotations
 import re
 
 _CONF_RANK = {"high": 3, "medium": 2, "low": 1}
+# Same-confidence tie-break between match kinds, so the winning `via` for a
+# (page, target) pair never depends on scan order (deterministic output).
+_VIA_RANK = {"url": 4, "title": 3, "body": 2, "label": 1}
 
 # SF Lightning URL shapes that NAME an entity (record-id-only URLs can't, so they
-# are ignored): /lightning/o/<Object>/...  and  /lightning/r/<Object>/<id>/view
-_URL_ENTITY = re.compile(r"/lightning/[or]/(\w+)", re.I)
+# are ignored): /lightning/o/<Object>/... · /lightning/r/<Object>/<id>/view ·
+# /lightning/n/<TabName> (a named custom tab) · the Setup Object Manager path.
+_URL_ENTITY = re.compile(r"/lightning/[orn]/(\w+)", re.I)
+_URL_SETUP_OBJECT = re.compile(r"/lightning/setup/ObjectManager/(\w+)", re.I)
 # Distinctive custom API names in free text (contain the "__" namespace separator).
 _API_NAME = re.compile(r"\b\w+__\w+\b")
 
@@ -93,7 +99,7 @@ def join(confluence_graph, sf_graph, *, match_titles=True, match_labels=False,
     def add(page_id, candidate, via, confidence):
         if not candidate or len(candidate) < min_len:
             return
-        rank = _CONF_RANK[confidence]
+        rank = (_CONF_RANK[confidence], _VIA_RANK[via])
         for sf_id in idx.get(candidate.lower(), ()):
             key = (page_id, sf_id)
             if key not in best or rank > best[key][0]:
@@ -108,8 +114,9 @@ def join(confluence_graph, sf_graph, *, match_titles=True, match_labels=False,
         body = n.get("text") or ""
         if scan_urls:
             haystack = body + " " + " ".join(n.get("urls") or [])
-            for m in _URL_ENTITY.finditer(haystack):
-                add(page_id, m.group(1), "url", "high")
+            for pat in (_URL_ENTITY, _URL_SETUP_OBJECT):
+                for m in pat.finditer(haystack):
+                    add(page_id, m.group(1), "url", "high")
         if match_titles:
             add(page_id, n.get("label") or _name(page_id), "title", "medium")
         if match_labels:
