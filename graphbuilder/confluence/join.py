@@ -87,10 +87,14 @@ def _page_labels(confluence_graph):
 
 
 def join(confluence_graph, sf_graph, *, match_titles=True, match_labels=False,
-         scan_urls=True, scan_body=False, min_len=4) -> list:
-    """Return ``documents`` cross-edges (page -> SF node), deduped to the highest-
-    confidence ``via`` per (page, target). Mutates nothing. Each edge is
+         scan_urls=True, scan_body=False, min_len=4, node_type="page") -> list:
+    """Return ``documents`` cross-edges (content node -> SF node), deduped to the
+    highest-confidence ``via`` per (source, target). Mutates nothing. Each edge is
     ``{"src", "type": "documents", "dst", "via", "confidence"}``.
+
+    The scan is generic over any content-bearing node (``label`` + optional
+    ``text`` / ``urls`` / ``labeled`` edges): ``node_type`` selects which — the
+    Jira join reuses this with ``node_type="jiraissue"``.
     """
     idx = _sf_index(sf_graph)
     page_labels = _page_labels(confluence_graph) if match_labels else {}
@@ -106,7 +110,7 @@ def join(confluence_graph, sf_graph, *, match_titles=True, match_labels=False,
                 best[key] = (rank, via, confidence)
 
     for n in (confluence_graph or {}).get("nodes", []) or []:
-        if not isinstance(n, dict) or n.get("type") != "page":
+        if not isinstance(n, dict) or n.get("type") != node_type:
             continue
         page_id = n.get("id")
         if not page_id:

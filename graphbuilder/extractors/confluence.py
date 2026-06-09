@@ -55,6 +55,9 @@ class ConfluenceExtractor:
             attrs["url"] = p.url
         if p.urls:
             attrs["urls"] = list(dict.fromkeys(p.urls))
+        if p.jira_keys:
+            # attr only — wiring page -> jiraissue is the deliberate jira.join step
+            attrs["jira_keys"] = list(dict.fromkeys(p.jira_keys))
         if p.body_text:
             attrs["text"] = p.body_text
         nodes = [node(pid, "page", title, **attrs)]

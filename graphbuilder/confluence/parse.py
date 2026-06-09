@@ -45,6 +45,7 @@ class CPage:
     url: str = ""                                    # absolute web URL if derivable, else ""
     links: list = field(default_factory=list)        # [(title, space_key_or_empty), ...]
     includes: list = field(default_factory=list)     # include/excerpt-include macro targets, same shape
+    jira_keys: list = field(default_factory=list)    # issue keys from jira macros
     attachments: list = field(default_factory=list)  # filenames
     mentions: list = field(default_factory=list)     # user keys
     urls: list = field(default_factory=list)         # external href / ri:url values (for the SF join)
@@ -61,6 +62,17 @@ _INCLUDE_MACRO = re.compile(
     r'<ac:structured-macro\b[^>]*ac:name\s*=\s*"(?:include|excerpt-include)"[^>]*>'
     r"(.*?)</ac:structured-macro>",
     re.I | re.S,
+)
+# Jira macros embed an issue by key. The page node carries the keys as an attr
+# only — wiring page -> jiraissue is the deliberate graphbuilder.jira.join step
+# (cross-source edges never come from a build).
+_JIRA_MACRO = re.compile(
+    r'<ac:structured-macro\b[^>]*ac:name\s*=\s*"jira"[^>]*>(.*?)</ac:structured-macro>',
+    re.I | re.S,
+)
+_JIRA_KEY_PARAM = re.compile(
+    r'<ac:parameter\b[^>]*ac:name\s*=\s*"key"[^>]*>\s*([A-Za-z][A-Za-z0-9_]*-\d+)\s*<',
+    re.I,
 )
 _RI_ATTACH = re.compile(r"<ri:attachment\b([^>]*)>", re.I)
 _RI_USER = re.compile(r"<ri:user\b([^>]*)>", re.I)
@@ -120,6 +132,15 @@ def iter_include_targets(storage: str) -> list:
     out = []
     for m in _INCLUDE_MACRO.finditer(storage or ""):
         out.extend(iter_page_links(m.group(1)))
+    return out
+
+
+def iter_jira_keys(storage: str) -> list:
+    """Issue keys embedded by jira macros (``<ac:parameter ac:name="key">``)."""
+    out = []
+    for m in _JIRA_MACRO.finditer(storage or ""):
+        for km in _JIRA_KEY_PARAM.finditer(m.group(1)):
+            out.append(km.group(1).upper())
     return out
 
 
@@ -245,6 +266,7 @@ def parse_page(path) -> CPage:
         url=str(url or ""),
         links=iter_page_links(scan_src),
         includes=iter_include_targets(scan_src),
+        jira_keys=iter_jira_keys(scan_src),
         attachments=iter_attachment_refs(scan_src),
         mentions=iter_user_mentions(scan_src),
         urls=iter_external_urls(scan_src),
