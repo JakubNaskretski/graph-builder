@@ -155,3 +155,49 @@ def test_parallel_equals_serial(tmp_path):
     build_bundle(tmp_path / "p", salesforce=fa, confluence_dump=dump, zip_path=False,
                  created_at="2026-06-07T00:00:00+00:00", parallel=True)
     assert sig(tmp_path / "s") == sig(tmp_path / "p")
+
+
+def _jira_scaffold(root: Path):
+    dump = root / "jira-dump" / "ACME"
+    dump.mkdir(parents=True)
+    (dump / "ACME-1.issue.json").write_text(json.dumps({
+        "id": "1", "key": "ACME-1",
+        "fields": {
+            "summary": "Sync drops readings",
+            "description": (f"{FILLER} JIRA_TAILMARKER. "
+                            "See https://x.lightning.force.com/lightning/o/Acme__c/list "
+                            "and https://wiki.example.internal/pages/viewpage.action?pageId=100"),
+            "project": {"key": "ACME", "name": "Acme Platform"},
+            "updated": "2026-06-01T10:00:00.000+0000",
+        },
+    }), "utf-8")
+    return root / "jira-dump"
+
+
+def test_bundle_with_all_three_sources(tmp_path):
+    fa, dump = _scaffold(tmp_path)
+    jdump = _jira_scaffold(tmp_path)
+    out = tmp_path / "kb3"
+    summary = build_bundle(out, salesforce=fa, confluence_dump=dump, jira_dump=jdump,
+                           zip_path=False, created_at="2026-06-09T00:00:00+00:00")
+    g = load_graph(out / "graph.json")
+    ids = _ids(g)
+
+    # issue node: text externalised to a pointer + excerpt, like pages
+    issue = ids["jiraissue/ACME-1"]
+    assert "text" not in issue
+    assert issue["content"] == "content/jira/ACME/ACME-1.txt"
+    assert "JIRA_TAILMARKER" in (out / issue["content"]).read_text("utf-8")
+    assert issue["excerpt"] and len(issue["excerpt"]) <= 280
+
+    edges = {(e["src"], e.get("via"), e["dst"]) for e in g["edges"]
+             if e["type"] in ("documents", "links-to")}
+    assert ("jiraissue/ACME-1", "url", "object/Acme__c") in edges        # issue -> SF
+    assert ("jiraissue/ACME-1", "url", "page/100") in edges              # issue -> page
+    assert ("page/100", "url", "object/Acme__c") in edges                # page -> SF
+
+    m = summary["manifest"]
+    assert m["sources"]["jira"]["projects"] == ["ACME"]
+    assert m["sources"]["jira"]["issues"] == 1
+    # full issue text stays out of graph.json
+    assert "JIRA_TAILMARKER" not in (out / "graph.json").read_text("utf-8")

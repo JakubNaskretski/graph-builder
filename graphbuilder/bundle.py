@@ -3,20 +3,20 @@ portable zip of text/JSON (no database).
 
 Two layers joined by pointers:
   - ``content/`` : the FULL retrieved data as flat files — Confluence page bodies as
-    ``.txt`` plus a raw storage ``.xhtml`` sidecar, and Salesforce source units
-    copied verbatim.
+    ``.txt`` plus a raw storage ``.xhtml`` sidecar, Jira issue summaries +
+    descriptions as ``.txt``, and Salesforce source units copied verbatim.
   - ``graph.json`` : lean structure. Every content-bearing node carries a ``content``
     pointer (a path relative to the bundle root) instead of inline body text, plus a
     short ``excerpt`` for Confluence pages. Under the no-DB constraint the graph IS
     the retrieval index — following edges gives structural recall a flat dump can't.
 
 :func:`build_bundle` builds each source's graph from its source input, externalises
-the content, joins Confluence->Salesforce (``documents`` edges), merges into one
-graph, and writes ``<out>/{manifest.json, graph.json, content/, README.txt}`` plus a
-zip.
+the content, joins every present pair (page->SF / issue->SF ``documents``;
+issue<->page ``links-to``), merges into one graph, and writes
+``<out>/{manifest.json, graph.json, content/, README.txt}`` plus a zip.
 
-Confidentiality: a bundle holds real page bodies AND Salesforce source — it is
-sensitive by default. Keep it local (gitignored); never commit or egress it. Only
+Confidentiality: a bundle holds real page bodies, issue text AND Salesforce
+source — it is sensitive by default. Keep it local (gitignored); never commit or egress it. Only
 source files that produced graph nodes are copied, so leakage-prone types nothing
 graphs (Named Credentials, Static Resources) are never bundled.
 """
@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .confluence.join import join, merge
+from .jira.join import join as jira_join, join_confluence
 from .extractors import all_extractors, build_graph
 from .persistence import to_json
 
@@ -172,6 +173,31 @@ def externalize_confluence(c_graph, dump_dir, content_dir) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Jira: write txt, point + excerpt, drop inline text
+# --------------------------------------------------------------------------- #
+def externalize_jira(j_graph, content_dir) -> dict:
+    """For each ``jiraissue`` node: write ``<KEY>.txt`` (summary + description)
+    under ``content/jira/<PROJECT>/``, set ``content`` / ``excerpt``, and DELETE
+    the inline ``text``."""
+    base = Path(content_dir) / "jira"
+    issues = 0
+    for n in j_graph.get("nodes", []) or []:
+        if not isinstance(n, dict) or n.get("type") != "jiraissue" or n.get("external"):
+            continue
+        key = _safe(str(n.get("id", "")).split("/", 1)[-1] or "issue")
+        project = _safe(str(n.get("project_key") or "_"))
+        body = "\n".join(x for x in (n.get("label"), n.get("text")) if x)
+        (base / project).mkdir(parents=True, exist_ok=True)
+        (base / project / f"{key}.txt").write_text(body, encoding="utf-8")
+        n["content"] = f"content/jira/{project}/{key}.txt"
+        if body:
+            n["excerpt"] = body[:_EXCERPT_CHARS]
+        n.pop("text", None)
+        issues += 1
+    return {"issues": issues}
+
+
+# --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
 def _counts(graph) -> dict:
@@ -197,6 +223,7 @@ def _readme(manifest) -> str:
         "  content/       full source content the graph points into:\n"
         "    confluence/<SPACE>/<id>.txt    page body (plain text)\n"
         "    confluence/<SPACE>/<id>.xhtml  raw storage (tables, macros, diagram refs)\n"
+        "    jira/<PROJECT>/<KEY>.txt       issue summary + description\n"
         "    salesforce/<path>              copied source units\n\n"
         "Consume:\n"
         "  1. load graph.json (nodes + edges).\n"
@@ -209,19 +236,21 @@ def _readme(manifest) -> str:
     )
 
 
-def build_bundle(out_dir, *, salesforce=None, confluence_dump=None, zip_path=None,
-                 join_opts=None, created_at=None, parallel=False) -> dict:
+def build_bundle(out_dir, *, salesforce=None, confluence_dump=None, jira_dump=None,
+                 zip_path=None, join_opts=None, created_at=None, parallel=False) -> dict:
     """Build a knowledge-base bundle at ``out_dir`` (and, unless ``zip_path is False``,
     a zip).
 
-    Provide ``salesforce`` (a force-app dir) and/or ``confluence_dump`` (a dir of
-    ``*.page.json`` from :func:`graphbuilder.confluence.collect`). Builds each graph,
-    externalises its content (pointers + files), joins Confluence->Salesforce when
-    both are present, merges into one graph, and writes manifest.json / graph.json /
-    content/ / README.txt. Returns a summary ``{out_dir, zip, manifest}``.
+    Provide any of ``salesforce`` (a force-app dir), ``confluence_dump`` (a dir of
+    ``*.page.json`` from :func:`graphbuilder.confluence.collect`) and ``jira_dump``
+    (a dir of ``*.issue.json`` from :func:`graphbuilder.jira.collect`). Builds each
+    graph, externalises its content (pointers + files), joins every present pair
+    (page->SF + issue->SF ``documents``; issue<->page ``links-to``), merges into
+    one graph, and writes manifest.json / graph.json / content/ / README.txt.
+    Returns a summary ``{out_dir, zip, manifest}``.
     """
-    if not salesforce and not confluence_dump:
-        raise ValueError("build_bundle needs salesforce= and/or confluence_dump=")
+    if not salesforce and not confluence_dump and not jira_dump:
+        raise ValueError("build_bundle needs salesforce=, confluence_dump= and/or jira_dump=")
     out_dir = Path(out_dir)
     if out_dir.exists():
         shutil.rmtree(out_dir)                  # clean rebuild — no stale content
@@ -229,25 +258,31 @@ def build_bundle(out_dir, *, salesforce=None, confluence_dump=None, zip_path=Non
     content_dir.mkdir(parents=True, exist_ok=True)
 
     empty = {"nodes": [], "edges": [], "unresolved": [], "errors": []}
-    sf_graph, c_graph = dict(empty), dict(empty)
+    sf_graph, c_graph, j_graph = dict(empty), dict(empty), dict(empty)
     sources: dict = {}
 
     # Build each source's graph. With `parallel`, offload the parser-free Confluence
-    # build to a worker while the Salesforce build runs on THIS thread — the Apex
-    # tree-sitter parser is unsendable (pinned to its origin thread), so the SF build
-    # must not move off-thread. Overlap is modest (GIL); true multi-core CPU parallelism
-    # (per-file multiprocessing) is deferred. Externalize/join/merge stay serial and the
-    # merge order is fixed, so the result is identical regardless of `parallel`.
-    if parallel and salesforce and confluence_dump:
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            f_c = ex.submit(build_graph, confluence_dump)   # parser-free -> safe off-thread
+    # and Jira builds to workers while the Salesforce build runs on THIS thread — the
+    # Apex tree-sitter parser is unsendable (pinned to its origin thread), so the SF
+    # build must not move off-thread. Overlap is modest (GIL); true multi-core CPU
+    # parallelism (per-file multiprocessing) is deferred. Externalize/join/merge stay
+    # serial and the merge order is fixed, so the result is identical regardless.
+    others = [d for d in (confluence_dump, jira_dump) if d]
+    if parallel and salesforce and others:
+        with ThreadPoolExecutor(max_workers=len(others)) as ex:
+            futures = {d: ex.submit(build_graph, d) for d in others}  # parser-free
             sf_graph = build_graph(salesforce)              # main thread (Apex parser)
-            c_graph = f_c.result()
+            if confluence_dump:
+                c_graph = futures[confluence_dump].result()
+            if jira_dump:
+                j_graph = futures[jira_dump].result()
     else:
         if salesforce:
             sf_graph = build_graph(salesforce)
         if confluence_dump:
             c_graph = build_graph(confluence_dump)
+        if jira_dump:
+            j_graph = build_graph(jira_dump)
 
     if salesforce:
         stats = externalize_salesforce(sf_graph, salesforce, content_dir)
@@ -259,9 +294,23 @@ def build_bundle(out_dir, *, salesforce=None, confluence_dump=None, zip_path=Non
             if isinstance(n, dict) and n.get("type") == "page" and n.get("space_key")
         })
         sources["confluence"] = {"dump": str(confluence_dump), "spaces": spaces, **stats}
+    if jira_dump:
+        stats = externalize_jira(j_graph, content_dir)
+        projects = sorted({
+            n.get("project_key") for n in j_graph["nodes"]
+            if isinstance(n, dict) and n.get("type") == "jiraissue" and n.get("project_key")
+        })
+        sources["jira"] = {"dump": str(jira_dump), "projects": projects, **stats}
 
-    cross = join(c_graph, sf_graph, **(join_opts or {})) if (salesforce and confluence_dump) else []
-    graph = merge(sf_graph, c_graph, cross)
+    # Cross-source joins for every pair that is present (each deliberate, tagged).
+    cross = []
+    if salesforce and confluence_dump:
+        cross += join(c_graph, sf_graph, **(join_opts or {}))
+    if salesforce and jira_dump:
+        cross += jira_join(j_graph, sf_graph)
+    if confluence_dump and jira_dump:
+        cross += join_confluence(j_graph, c_graph)
+    graph = merge(merge(sf_graph, c_graph), j_graph, cross)
 
     # Bodies were already externalised to content/ pointers; redact_text is the
     # belt-and-braces guarantee that no inline body can ever reach graph.json.
@@ -278,7 +327,8 @@ def build_bundle(out_dir, *, salesforce=None, confluence_dump=None, zip_path=Non
             "unresolved": len(graph.get("unresolved", [])),
             "errors": len(graph.get("errors", [])),
         },
-        "content_format": {"confluence": ["txt", "xhtml"], "salesforce": ["source"]},
+        "content_format": {"confluence": ["txt", "xhtml"], "jira": ["txt"],
+                           "salesforce": ["source"]},
         "notice": "Contains page bodies and Salesforce source. Keep local; do not commit or egress.",
     }
     (out_dir / "manifest.json").write_text(

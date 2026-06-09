@@ -28,12 +28,13 @@ skill)::
     graph-builder pipeline --salesforce force-app --confluence-dump dump --out kb
     graph-builder pipeline --config pipeline.json
 
-Runs (optional) Confluence collect -> per-source builds -> Confluence->SF join ->
-knowledge-base bundle, producing ``<out>/{manifest.json, graph.json, content/}``
-+ zip. ``--config`` reads the same options from a JSON file (explicit flags win),
-so a recurring KB refresh is one command + one config. ``--collect`` needs
-``--base-url``, ``--spaces`` and ``$CONFLUENCE_TOKEN`` (the token is only ever
-read from the environment).
+Runs (optional) Confluence/Jira collects -> per-source builds -> cross-source
+joins -> knowledge-base bundle, producing ``<out>/{manifest.json, graph.json,
+content/}`` + zip. ``--config`` reads the same options from a JSON file (explicit
+flags win), so a recurring KB refresh is one command + one config. ``--collect``
+needs ``--base-url``, ``--spaces`` and ``$CONFLUENCE_TOKEN``; ``--collect-jira``
+needs ``--jira-base-url``, ``--projects`` and ``$JIRA_TOKEN`` (tokens are only
+ever read from the environment).
 
 Exit codes (both modes): ``0`` clean · ``1`` fatal (bad input/setup) · ``2``
 usage · ``3`` finished, but the run recorded errors (build ``errors``, collect
@@ -143,10 +144,24 @@ def _pipeline_cli(argv) -> int:
     parser.add_argument("--base-url", default=None, help="Confluence instance root URL")
     parser.add_argument("--spaces", default=None,
                         help="comma-separated Confluence space keys to collect")
+    parser.add_argument("--jira-dump", default=None,
+                        help="Jira dump dir (collect target / build input)")
+    parser.add_argument("--collect-jira", action="store_true", default=None,
+                        help="refresh the dump from Jira first "
+                             "(needs --jira-base-url, --projects, $JIRA_TOKEN)")
+    parser.add_argument("--jira-base-url", default=None, help="Jira instance root URL")
+    parser.add_argument("--projects", default=None,
+                        help="comma-separated Jira project keys to collect")
+    parser.add_argument("--remote-links", action="store_true", default=None,
+                        help="also fetch each issue's remote links (one extra request "
+                             "per issue; the strongest issue->page signal)")
     parser.add_argument("--insecure", action="store_true", default=None,
-                        help="skip TLS verification (self-signed on-prem certs)")
+                        help="skip TLS verification (self-signed on-prem certs) — "
+                             "prefer --ca-bundle")
+    parser.add_argument("--ca-bundle", default=None,
+                        help="PEM file of a private CA to trust (keeps full TLS verification)")
     parser.add_argument("--no-prune", dest="prune", action="store_false", default=None,
-                        help="keep dump files for pages a complete listing no longer returns")
+                        help="keep dump files for units a complete listing no longer returns")
     parser.add_argument("--out", default=None, help="bundle output directory (default: kb)")
     parser.add_argument("--no-zip", dest="zip", action="store_false", default=None,
                         help="skip writing the bundle zip next to --out")
@@ -159,39 +174,64 @@ def _pipeline_cli(argv) -> int:
 
     salesforce = merged.get("salesforce")
     dump = merged.get("confluence_dump")
-    if not salesforce and not dump:
-        print("pipeline: nothing to do — give --salesforce and/or --confluence-dump "
-              "(or set them in --config)", file=sys.stderr)
+    jira_dump = merged.get("jira_dump")
+    if not salesforce and not dump and not jira_dump:
+        print("pipeline: nothing to do — give --salesforce, --confluence-dump and/or "
+              "--jira-dump (or set them in --config)", file=sys.stderr)
         return EXIT_FATAL
 
     recorded_errors = 0
+
+    def _keys(value):
+        return [s.strip() for s in value.split(",") if s.strip()] \
+            if isinstance(value, str) else (value or [])
 
     if merged.get("collect"):
         if not dump:
             print("pipeline: --collect needs --confluence-dump as its target", file=sys.stderr)
             return EXIT_FATAL
-        spaces = merged.get("spaces") or []
-        if isinstance(spaces, str):
-            spaces = [s.strip() for s in spaces.split(",") if s.strip()]
         from .confluence.collect import CollectError, collect
         try:
             summary = collect(
-                merged.get("base_url"), spaces, dump,
+                merged.get("base_url"), _keys(merged.get("spaces")), dump,
                 insecure=bool(merged.get("insecure")),
+                ca_bundle=merged.get("ca_bundle"),
                 prune=merged.get("prune", True),
             )
         except CollectError as exc:
             print(f"pipeline: collect failed: {exc}", file=sys.stderr)
             return EXIT_FATAL
-        recorded_errors += len(summary["errors"])
+        recorded_errors += len(summary["errors"]) + len(summary["incomplete"])
         print(
             f"collect: pages={summary['pages']} unchanged={summary['unchanged']} "
             f"pruned={len(summary['pruned'])} errors={len(summary['errors'])}"
             + (f" INCOMPLETE={','.join(summary['incomplete'])}" if summary["incomplete"] else ""),
             file=sys.stderr,
         )
-        if summary["incomplete"]:
-            recorded_errors += len(summary["incomplete"])
+
+    if merged.get("collect_jira"):
+        if not jira_dump:
+            print("pipeline: --collect-jira needs --jira-dump as its target", file=sys.stderr)
+            return EXIT_FATAL
+        from .jira.collect import CollectError as JiraCollectError, collect as jira_collect
+        try:
+            summary = jira_collect(
+                merged.get("jira_base_url"), _keys(merged.get("projects")), jira_dump,
+                insecure=bool(merged.get("insecure")),
+                ca_bundle=merged.get("ca_bundle"),
+                remote_links=bool(merged.get("remote_links")),
+                prune=merged.get("prune", True),
+            )
+        except JiraCollectError as exc:
+            print(f"pipeline: jira collect failed: {exc}", file=sys.stderr)
+            return EXIT_FATAL
+        recorded_errors += len(summary["errors"]) + len(summary["incomplete"])
+        print(
+            f"collect-jira: issues={summary['issues']} unchanged={summary['unchanged']} "
+            f"pruned={len(summary['pruned'])} errors={len(summary['errors'])}"
+            + (f" INCOMPLETE={','.join(summary['incomplete'])}" if summary["incomplete"] else ""),
+            file=sys.stderr,
+        )
 
     from .bundle import build_bundle
     try:
@@ -199,6 +239,7 @@ def _pipeline_cli(argv) -> int:
             merged.get("out") or "kb",
             salesforce=salesforce,
             confluence_dump=dump,
+            jira_dump=jira_dump,
             zip_path=None if merged.get("zip", True) else False,
         )
     except ValueError as exc:
