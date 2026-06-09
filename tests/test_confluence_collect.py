@@ -23,7 +23,9 @@ class _Resp:
 
 
 class _FakeOpener:
-    """Serves canned pages with real start/limit pagination semantics."""
+    """Serves canned content with real start/limit pagination semantics. Canned
+    items are keyed by space; blog posts (``"type": "blogpost"`` items) are served
+    only to the blogpost listing, everything else to the page listing."""
 
     def __init__(self, pages_by_space):
         self.pages_by_space = pages_by_space
@@ -33,12 +35,18 @@ class _FakeOpener:
         self.urls.append(req.full_url)
         q = urllib.parse.parse_qs(urllib.parse.urlparse(req.full_url).query)
         space, start, limit = q["spaceKey"][0], int(q["start"][0]), int(q["limit"][0])
-        chunk = self.pages_by_space.get(space, [])[start:start + limit]
+        ctype = q.get("type", ["page"])[0]
+        pool = [p for p in self.pages_by_space.get(space, [])
+                if (p.get("type") or "page") == ctype]
+        chunk = pool[start:start + limit]
         return _Resp({"results": chunk, "start": start, "limit": limit, "size": len(chunk)})
 
 
-def _page(pid):
-    return {"id": pid, "title": f"P{pid}", "space": {"key": "ENG"}, "body": {"storage": {"value": "x"}}}
+def _page(pid, version=None):
+    p = {"id": pid, "title": f"P{pid}", "space": {"key": "ENG"}, "body": {"storage": {"value": "x"}}}
+    if version is not None:
+        p["version"] = {"number": version}
+    return p
 
 
 def test_collect_writes_pages_and_paginates(tmp_path):
@@ -48,7 +56,9 @@ def test_collect_writes_pages_and_paginates(tmp_path):
     assert summary["pages"] == 3 and summary["spaces"]["ENG"] == 3
     assert (tmp_path / "ENG" / "1.page.json").exists()
     assert (tmp_path / "ENG" / "3.page.json").exists()
-    assert len(op.urls) == 2          # start=0 (2 results) then start=2 (1 result -> stop)
+    page_lists = [u for u in op.urls if "type=page" in u]
+    assert len(page_lists) == 2       # start=0 (2 results) then start=2 (1 result -> stop)
+    assert any("type=blogpost" in u for u in op.urls)   # blog posts listed by default
 
 
 def test_token_from_env(tmp_path, monkeypatch):
@@ -102,8 +112,24 @@ class _429ThenOK:
 
 def test_429_is_retried(tmp_path):
     op = _429ThenOK({"results": [_page("1")], "start": 0, "limit": 50, "size": 1})
-    summary = collect("https://w", "ENG", tmp_path, token="t", opener=op, sleep=NO_SLEEP)
+    summary = collect("https://w", "ENG", tmp_path, token="t", opener=op, sleep=NO_SLEEP,
+                      content_types="page")   # a bare string is normalised to a list
     assert summary["pages"] == 1 and op.calls == 2
+
+
+class _503ThenOK(_429ThenOK):
+    def open(self, req, timeout=None):
+        self.calls += 1
+        if self.calls == 1:
+            raise urllib.error.HTTPError(req.full_url, 503, "Unavailable", {}, None)
+        return _Resp(self.payload)
+
+
+def test_transient_5xx_is_retried(tmp_path):
+    op = _503ThenOK({"results": [_page("1")], "start": 0, "limit": 50, "size": 1})
+    summary = collect("https://w", "ENG", tmp_path, token="t", opener=op, sleep=NO_SLEEP,
+                      content_types="page")
+    assert summary["pages"] == 1 and op.calls == 2 and summary["errors"] == []
 
 
 def test_multiple_spaces(tmp_path):
@@ -131,3 +157,78 @@ def test_concurrent_spaces_match_sequential(tmp_path):
                   token="t", opener=_SafeOpener(pages), sleep=NO_SLEEP, max_workers=4)
     assert seq["spaces"] == con["spaces"] == {"ENG": 2, "OPS": 1, "DOC": 1}
     assert seq["pages"] == con["pages"] == 4
+
+
+def test_blogposts_collected_alongside_pages(tmp_path):
+    blog = {"id": "9", "type": "blogpost", "title": "News", "space": {"key": "ENG"},
+            "body": {"storage": {"value": "b"}}}
+    op = _FakeOpener({"ENG": [_page("1"), blog]})
+    summary = collect("https://w", "ENG", tmp_path, token="t", opener=op, sleep=NO_SLEEP)
+    assert summary["pages"] == 2
+    assert json.loads((tmp_path / "ENG" / "9.page.json").read_text("utf-8"))["type"] == "blogpost"
+
+
+def test_incremental_skips_unchanged_versions(tmp_path):
+    op = _FakeOpener({"ENG": [_page("1", version=4), _page("2", version=1)]})
+    first = collect("https://w", "ENG", tmp_path, token="t", opener=op, sleep=NO_SLEEP)
+    assert first["pages"] == 2 and first["unchanged"] == 0
+    mtime = (tmp_path / "ENG" / "1.page.json").stat().st_mtime_ns
+
+    second = collect("https://w", "ENG", tmp_path, token="t", opener=op, sleep=NO_SLEEP)
+    assert second["pages"] == 0 and second["unchanged"] == 2
+    assert (tmp_path / "ENG" / "1.page.json").stat().st_mtime_ns == mtime  # untouched
+
+    op.pages_by_space["ENG"][0] = _page("1", version=5)        # page 1 edited upstream
+    third = collect("https://w", "ENG", tmp_path, token="t", opener=op, sleep=NO_SLEEP)
+    assert third["pages"] == 1 and third["unchanged"] == 1
+
+
+def test_versionless_payload_always_rewrites(tmp_path):
+    op = _FakeOpener({"ENG": [_page("1")]})                     # no version info
+    collect("https://w", "ENG", tmp_path, token="t", opener=op, sleep=NO_SLEEP)
+    second = collect("https://w", "ENG", tmp_path, token="t", opener=op, sleep=NO_SLEEP)
+    assert second["pages"] == 1 and second["unchanged"] == 0    # can't prove unchanged -> rewrite
+
+
+def test_prune_removes_vanished_pages_after_complete_listing(tmp_path):
+    op = _FakeOpener({"ENG": [_page("1", version=1), _page("2", version=1)]})
+    collect("https://w", "ENG", tmp_path, token="t", opener=op, sleep=NO_SLEEP)
+    op.pages_by_space["ENG"] = [_page("1", version=1)]          # page 2 deleted upstream
+    summary = collect("https://w", "ENG", tmp_path, token="t", opener=op, sleep=NO_SLEEP)
+    assert summary["pruned"] == ["2"]
+    assert not (tmp_path / "ENG" / "2.page.json").exists()
+    assert (tmp_path / "ENG" / "1.page.json").exists()
+
+
+def test_prune_opt_out(tmp_path):
+    op = _FakeOpener({"ENG": [_page("1", version=1), _page("2", version=1)]})
+    collect("https://w", "ENG", tmp_path, token="t", opener=op, sleep=NO_SLEEP)
+    op.pages_by_space["ENG"] = [_page("1", version=1)]
+    summary = collect("https://w", "ENG", tmp_path, token="t", opener=op, sleep=NO_SLEEP, prune=False)
+    assert summary["pruned"] == [] and (tmp_path / "ENG" / "2.page.json").exists()
+
+
+class _FirstListThenErr(_FakeOpener):
+    """Serves the first listing request, then hard-errors — an aborted space."""
+    def open(self, req, timeout=None):
+        if len(self.urls) >= 1:
+            raise urllib.error.HTTPError(req.full_url, 500, "boom", {}, None)
+        return super().open(req, timeout)
+
+
+def test_incomplete_listing_never_prunes_and_is_marked(tmp_path):
+    full = _FakeOpener({"ENG": [_page("1", version=1), _page("2", version=1), _page("3", version=1)]})
+    collect("https://w", "ENG", tmp_path, token="t", opener=full, sleep=NO_SLEEP)
+
+    # next run lists only the first chunk (page 1+2), then aborts mid-pagination
+    aborted = _FirstListThenErr({"ENG": [_page("1", version=1), _page("2", version=1)]})
+    summary = collect("https://w", "ENG", tmp_path, token="t", opener=aborted,
+                      sleep=NO_SLEEP, per_page=2)
+    assert summary["incomplete"] == ["ENG"] and summary["pruned"] == []
+    assert (tmp_path / "ENG" / "3.page.json").exists()          # NOT deleted on partial data
+    assert (tmp_path / "ENG" / ".incomplete").exists()          # dump marked partial
+
+    # a later complete run clears the marker (and may then prune)
+    recovered = _FakeOpener({"ENG": [_page("1", version=1), _page("2", version=1), _page("3", version=1)]})
+    collect("https://w", "ENG", tmp_path, token="t", opener=recovered, sleep=NO_SLEEP)
+    assert not (tmp_path / "ENG" / ".incomplete").exists()
