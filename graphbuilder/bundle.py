@@ -263,7 +263,9 @@ def build_bundle(out_dir, *, salesforce=None, confluence_dump=None, zip_path=Non
     cross = join(c_graph, sf_graph, **(join_opts or {})) if (salesforce and confluence_dump) else []
     graph = merge(sf_graph, c_graph, cross)
 
-    (out_dir / "graph.json").write_text(to_json(graph), encoding="utf-8")
+    # Bodies were already externalised to content/ pointers; redact_text is the
+    # belt-and-braces guarantee that no inline body can ever reach graph.json.
+    (out_dir / "graph.json").write_text(to_json(graph, redact_text=True), encoding="utf-8")
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "generator": "graph-builder/bundle",

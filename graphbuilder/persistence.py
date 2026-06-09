@@ -34,6 +34,12 @@ _GRAPH_KEYS = ("nodes", "edges", "unresolved", "errors")
 _INLINE_TEXT_ATTR = "text"
 
 
+def _entry_key(entry) -> str:
+    """Total order over unresolved/errors entries of any shape (they are plain
+    dicts of strings today, but stay tolerant)."""
+    return json.dumps(entry, sort_keys=True, ensure_ascii=False, default=str)
+
+
 def _redact_node(n: dict) -> dict:
     """Return a copy of ``n`` with the inline body text dropped, flagged by
     ``text_redacted`` so a redacted page is distinguishable from a body-less one.
@@ -66,8 +72,10 @@ def to_jsonable(graph, redact_text: bool = False) -> dict:
         "version": SCHEMA_VERSION,
         "nodes": nodes,
         "edges": edges,
-        "unresolved": list(graph.get("unresolved", []) or []),
-        "errors": list(graph.get("errors", []) or []),
+        # sorted like nodes/edges so determinism holds for the whole file, even
+        # when a build interleaves these (e.g. a parallel bundle build)
+        "unresolved": sorted(graph.get("unresolved", []) or [], key=_entry_key),
+        "errors": sorted(graph.get("errors", []) or [], key=_entry_key),
     }
 
 
