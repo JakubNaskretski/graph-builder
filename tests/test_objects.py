@@ -266,6 +266,22 @@ def test_category_for_each_kind(tmp_path):
             '</CustomObject>\n',
             "customsetting",
         ),
+        # big object — suffix wins
+        "AcmeLedger__b": (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">\n'
+            '  <label>Acme Ledger</label>\n'
+            '</CustomObject>\n',
+            "bigobject",
+        ),
+        # external object — suffix wins
+        "AcmeOrder__x": (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">\n'
+            '  <label>Acme Order</label>\n'
+            '</CustomObject>\n',
+            "externalobject",
+        ),
         # plain custom object
         "MeterPoint__c": (
             '<?xml version="1.0" encoding="UTF-8"?>\n'

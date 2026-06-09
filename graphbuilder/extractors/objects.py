@@ -20,9 +20,10 @@ validationRule, and recordType files. Emits:
 
 The object node carries a `category` attr derived purely from API name /
 structural shape: "platformevent" (`__e`), "custommetadata" (`__mdt`),
-"customsetting" (a `<customSettingsType>` element), "custom" (`__c`), else
-"standard". Custom settings also end in `__c`, so the `<customSettingsType>`
-check precedes the bare `__c` test.
+"bigobject" (`__b`), "externalobject" (`__x`), "customsetting" (a
+`<customSettingsType>` element), "custom" (`__c`), else "standard". Custom
+settings also end in `__c`, so the `<customSettingsType>` check precedes the
+bare `__c` test.
 
 Names and structural relationships only — field values, formulas, filter `<value>`
 literals, picklist values, and record-type `<picklistValues>` are never read.
@@ -88,12 +89,15 @@ def _classify(name: str, meta_path: Path) -> str:
         return "platformevent"
     if n.endswith("__mdt"):
         return "custommetadata"
+    if n.endswith("__b"):
+        return "bigobject"
+    if n.endswith("__x"):
+        return "externalobject"
     if _has_custom_settings_type(meta_path):
         return "customsetting"
     if n.endswith("__c"):
         return "custom"
     return "standard"
-# TODO: add __b (Big Object) and __x (External Object)
 
 
 def _relationship_target(seg: str, rel_to_object: dict) -> str:
