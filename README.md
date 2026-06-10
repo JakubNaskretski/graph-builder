@@ -51,8 +51,9 @@ python -m graphbuilder path/to/MyClass.cls --types apexmethod
 
 ### One-command pipeline
 
-Every stage — (optional) Confluence collect → per-source builds → join → bundle —
-behind a single command, made for wrapping as an agent skill or a cron refresh:
+Every stage — (optional) Confluence/Jira collects → per-source builds → joins →
+bundle — behind a single command, made for wrapping as an agent skill or a cron
+refresh:
 
 ```sh
 graph-builder pipeline --salesforce force-app --confluence-dump confluence-dump --out kb
@@ -141,6 +142,38 @@ python scripts/confluence_join.py confluence-dump/confluence-graph.json sf-graph
 > Every dump and any built Confluence / joined graph therefore holds real content —
 > they are **gitignored and must never be committed or egressed**.
 
+## Jira (a third, joinable source)
+
+Same architecture as Confluence (collect → parse → extractor → join), same auth
+model (Data Center / Server PAT as a Bearer token, read ONLY from `$JIRA_TOKEN`),
+same incremental dump semantics (unchanged `updated` → untouched; complete
+listing → prune; aborted listing → `.incomplete`, never pruned).
+
+```sh
+# 1. collect project(s) into a local, gitignored dump
+JIRA_TOKEN=… python scripts/jira_collect.py \
+    --base-url https://jira.example.internal --project ACME,OPS --out jira-dump/
+# --remote-links also fetches each issue's remote links (1 extra request/issue —
+# the strongest issue->Confluence-page signal)
+
+# 2. build a Jira graph with the ordinary builder
+python -m graphbuilder jira-dump/ -o jira-dump/jira-graph.json
+```
+
+- **Nodes** `jiraproject` · `jiraissue` (keyed by Jira's stable issue key; summary
+  as label, description as text) · `jiralabel` · `jirauser`; **edges** `child-of`
+  (issue→project, subtask→parent) · `links-to` (issue links + subtasks) ·
+  `labeled` · `assigned-to` · `authored-by` · `mentions`.
+- **Joins are separate and auditable**, like Confluence's:
+  `graphbuilder.jira.join(jira, sf)` → issue -`documents`-> SF entity (Lightning
+  URLs in the description; summary-match deliberately off by default);
+  `join_confluence(jira, confluence)` → issue <-`links-to`-> page (page URLs in
+  the issue; jira macros on the page). All edges carry `via`/`confidence`.
+- Scope: Jira DC/Server 8.14+ (PAT). Jira Cloud and the agile API
+  (boards/sprints) are out of scope, matching the Confluence source.
+- Same confidentiality posture: dumps and built Jira graphs hold real issue text —
+  gitignored, never committed or egressed.
+
 ## Knowledge-base bundle (portable, zip + text, no DB)
 Package one or both sources into a self-contained **knowledge base** — a zip of
 text/JSON an on-prem agent can navigate offline. Two layers joined by pointers: a lean
@@ -151,6 +184,9 @@ the retrieval index — following edges gives structural recall a flat dump can'
 ```sh
 python scripts/build_bundle.py --salesforce path/to/force-app \
     --confluence confluence-dump/ --out knowledge-base/
+# or all three sources behind one command:
+graph-builder pipeline --salesforce force-app --confluence-dump confluence-dump \
+    --jira-dump jira-dump --out knowledge-base
 ```
 
 ```
@@ -160,12 +196,13 @@ knowledge-base/                         (+ knowledge-base.zip)
 ├── content/
 │   ├── confluence/<SPACE>/<id>.txt     # page body (plain text)
 │   ├── confluence/<SPACE>/<id>.xhtml   # raw storage (tables, macros, diagram refs)
+│   ├── jira/<PROJECT>/<KEY>.txt        # issue summary + description
 │   └── salesforce/<path>               # copied source units
 └── README.txt
 ```
 
-- Either source may be omitted; when both are present, page→SF `documents` edges are
-  added via the join.
+- Any source may be omitted; every present pair is joined (page→SF / issue→SF
+  `documents`; issue↔page `links-to`).
 - Full body text lives in `content/*.txt`, **not** in `graph.json` (only a short
   excerpt) — the graph stays small and the agent reads only what it needs.
 - Only source files that produced graph nodes are copied, so leakage-prone types

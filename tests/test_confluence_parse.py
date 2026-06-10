@@ -153,3 +153,19 @@ def test_parse_page_blogpost_content_type(tmp_path):
                              "space": {"key": "ENG"},
                              "body": {"storage": {"value": "x"}}}), "utf-8")
     assert parse_page(p).content_type == "blogpost"
+
+
+def test_jira_macro_keys_collected(tmp_path):
+    from graphbuilder.confluence.parse import iter_jira_keys
+    s = ('<ac:structured-macro ac:name="jira">'
+         '<ac:parameter ac:name="key">acme-101</ac:parameter></ac:structured-macro>'
+         '<ac:structured-macro ac:name="jira">'
+         '<ac:parameter ac:name="server">x</ac:parameter>'
+         '<ac:parameter ac:name="key">OPS-7</ac:parameter></ac:structured-macro>'
+         '<ac:structured-macro ac:name="info">'
+         '<ac:parameter ac:name="key">NOT-1</ac:parameter></ac:structured-macro>')
+    assert iter_jira_keys(s) == ["ACME-101", "OPS-7"]   # uppercased; non-jira macro skipped
+    p = tmp_path / "5.page.json"
+    p.write_text(json.dumps({"id": "5", "title": "Runbook", "space": {"key": "ENG"},
+                             "body": {"storage": {"value": s}}}), "utf-8")
+    assert parse_page(p).jira_keys == ["ACME-101", "OPS-7"]

@@ -178,3 +178,15 @@ def test_blogpost_marked_on_node(tmp_path):
     page = _ids(nodes)["page/9"]
     assert page["type"] == "page" and page["content_type"] == "blogpost"
     assert ("page/9", "child-of", "space", "ENG") in _et(edges)   # blog posts don't nest
+
+
+def test_jira_macro_keys_attr_only_no_build_edge(tmp_path):
+    data = {"id": "5", "title": "Runbook", "space": {"key": "ENG"},
+            "body": {"storage": {"value":
+                '<ac:structured-macro ac:name="jira">'
+                '<ac:parameter ac:name="key">ACME-101</ac:parameter></ac:structured-macro>'}}}
+    nodes, edges = EX.extract(_w(tmp_path, "5.page.json", data))
+    page = _ids(nodes)["page/5"]
+    assert page["jira_keys"] == ["ACME-101"]
+    # cross-source wiring is the deliberate jira.join step, never a build edge
+    assert not any(e["to_kind"] == "jiraissue" for e in edges)

@@ -77,3 +77,31 @@ def test_pipeline_without_sources_is_fatal(capsys):
 def test_pipeline_collect_without_dump_is_fatal(tmp_path, capsys):
     assert main(["pipeline", "--collect", "--salesforce", str(_force_app(tmp_path))]) == 1
     assert "--collect needs" in capsys.readouterr().err
+
+
+def _jira_dump(root):
+    d = root / "jira-dump" / "ACME"
+    d.mkdir(parents=True)
+    (d / "ACME-1.issue.json").write_text(json.dumps({
+        "id": "1", "key": "ACME-1",
+        "fields": {"summary": "Sync bug",
+                   "description": "https://x.lightning.force.com/lightning/o/Acme__c/list",
+                   "project": {"key": "ACME"}},
+    }), "utf-8")
+    return root / "jira-dump"
+
+
+def test_pipeline_with_jira_source(tmp_path, capsys):
+    fa, jdump = _force_app(tmp_path), _jira_dump(tmp_path)
+    out = tmp_path / "kb"
+    code = main(["pipeline", "--salesforce", str(fa), "--jira-dump", str(jdump),
+                 "--out", str(out), "--no-zip"])
+    assert code == 0
+    err = capsys.readouterr().err
+    assert "documents=1" in err                  # issue -> SF join fired
+    assert (out / "content" / "jira" / "ACME" / "ACME-1.txt").exists()
+
+
+def test_pipeline_collect_jira_without_dump_is_fatal(tmp_path, capsys):
+    assert main(["pipeline", "--collect-jira", "--salesforce", str(_force_app(tmp_path))]) == 1
+    assert "--collect-jira needs" in capsys.readouterr().err

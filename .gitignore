@@ -4,10 +4,12 @@ examples/
 force-app/
 obsidian-vault/
 confluence-dump/
+jira-dump/
 knowledge-base/
 *.zip
 *.sqlite
 *.page.json
+*.issue.json
 # Built graphs — org-derived ids (and, un-redacted, Confluence bodies). Backstop
 # behind the CLI's default text redaction; covers the canonical `-o graph.json`.
 graph.json

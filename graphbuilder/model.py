@@ -29,6 +29,9 @@ NODE_TYPES = {
     # Structural names plus page body text — a deliberate content-capture exception to
     # the names-only rule, so Confluence outputs are sensitive-by-default and gitignored.
     "space", "page", "attachment", "confluencelabel", "confluenceuser",
+    # ---- Jira source (a third, SEPARATE graph; see graphbuilder/jira) ----
+    # Same content-capture exception: issue nodes carry the description text inline.
+    "jiraproject", "jiraissue", "jirauser", "jiralabel",
 }
 EDGE_TYPES = {
     "field_of", "lookup", "on", "calls", "references", "touches", "uses",
@@ -36,9 +39,10 @@ EDGE_TYPES = {
     "extends", "implements", "invocable", "aura-enabled", "wire",
     "reads", "writes", "subflow", "async", "validates", "formula",
     "tests", "requires",
-    # ---- Confluence: intra-source structure, plus `documents` (the cross-source join) ----
+    # ---- Confluence / Jira: intra-source structure, plus `documents` (the
+    # cross-source join; never emitted by a build) ----
     "child-of", "links-to", "attaches", "labeled", "mentions", "authored-by",
-    "documents",
+    "assigned-to", "documents",
 }
 
 
