@@ -2,7 +2,10 @@
 name = "graph-builder"
 version = "0.1.0"
 description = "Parse a Salesforce force-app into a typed metadata graph (nodes + edges)"
-requires-python = ">=3.11"
+# Floor verified by running the full suite on 3.9/3.10/3.12 (stdlib-only runtime;
+# all new-syntax annotations sit behind `from __future__ import annotations`).
+# Keep it low on purpose: the on-prem agent runtime's Python version is unknown.
+requires-python = ">=3.9"
 dependencies = []
 
 [project.scripts]

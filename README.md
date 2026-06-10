@@ -49,6 +49,20 @@ python -m graphbuilder path/to/MyClass.cls --levels 2 --repo path/to/force-app
 python -m graphbuilder path/to/MyClass.cls --types apexmethod
 ```
 
+### One-command pipeline
+
+Every stage — (optional) Confluence collect → per-source builds → join → bundle —
+behind a single command, made for wrapping as an agent skill or a cron refresh:
+
+```sh
+graph-builder pipeline --salesforce force-app --confluence-dump confluence-dump --out kb
+graph-builder pipeline --config pipeline.json        # same options from a JSON file (flags win)
+```
+
+Exit codes (all CLI modes): `0` clean · `1` fatal (bad input/setup) · `2` usage ·
+`3` finished but the run recorded errors — output is still written, so a harness
+can key off the code without losing the artifact.
+
 ## Layers
 - **Parsers** (`graphbuilder/salesforce.py`, `omnistudio.py`): per-unit metadata parsers
   — objects + fields, Apex, triggers, flows, LWC, flexipages, permission sets /
@@ -107,9 +121,15 @@ python -m graphbuilder confluence-dump/ -o confluence-dump/confluence-graph.json
 python scripts/confluence_join.py confluence-dump/confluence-graph.json sf-graph.json -o joined.json
 ```
 
-- **Nodes** `space` · `page` · `attachment` · `confluencelabel` · `confluenceuser`;
-  **edges** `child-of` · `links-to` · `attaches` · `labeled` · `mentions` ·
-  `authored-by` — all parsed from the storage-format markup, not guessed from prose.
+- **Nodes** `space` · `page` (id-keyed — rename-stable; blog posts too, marked
+  `content_type`) · `attachment` · `confluencelabel` · `confluenceuser`;
+  **edges** `child-of` · `links-to` · `embeds` (include/excerpt-include macros) ·
+  `attaches` · `labeled` · `mentions` · `authored-by` — all parsed from the
+  storage-format markup, not guessed from prose.
+- **Re-collection is incremental.** Unchanged pages (same `version.number`) are
+  not rewritten; pages a complete listing no longer returns are pruned from the
+  dump (`--no-prune` to keep them); a space whose listing aborted is marked with
+  a `.incomplete` sentinel and never pruned.
 - **The join is separate and auditable.** `graphbuilder.confluence.join(confluence,
   salesforce)` returns `documents` cross-edges tagged with `via`/`confidence` (org
   URLs + exact title match by default; labels / body scan opt-in), so messy
