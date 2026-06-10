@@ -72,7 +72,7 @@ def test_bundle_tree_and_zip(kb):
 
 
 def test_confluence_pointer_model(kb):
-    page = _ids(kb["graph"])["page/ENG/Acme Overview"]
+    page = _ids(kb["graph"])["page/100"]
     assert "text" not in page                                   # inline body removed
     assert page["content"] == "content/confluence/ENG/100.txt"
     assert page["content_xhtml"] == "content/confluence/ENG/100.xhtml"
@@ -93,7 +93,7 @@ def test_salesforce_units_copied(kb):
 
 def test_documents_cross_edge(kb):
     docs = {(e["src"], e["dst"]) for e in kb["graph"]["edges"] if e["type"] == "documents"}
-    assert ("page/ENG/Acme Overview", "object/Acme__c") in docs
+    assert ("page/100", "object/Acme__c") in docs
 
 
 def test_manifest(kb):

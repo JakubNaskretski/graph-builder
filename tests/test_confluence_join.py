@@ -94,3 +94,25 @@ def test_merge_unions_and_does_not_mutate():
 def test_join_and_merge_tolerate_empty():
     assert join({}, {}) == [] and join(None, None) == []
     assert merge(None, None, None)["nodes"] == []
+
+
+def test_join_named_tab_and_object_manager_urls():
+    sf = {"nodes": [
+        {"id": "tab/Acme_Console", "type": "tab", "label": "Acme_Console"},
+        {"id": "object/MeterPoint__c", "type": "object", "label": "MeterPoint__c"},
+    ], "edges": []}
+    g = _cgraph([_page("page/1", "Runbook", urls=[
+        "https://x.lightning.force.com/lightning/n/Acme_Console",
+        "https://x.lightning.force.com/lightning/setup/ObjectManager/MeterPoint__c/FieldsAndRelationships/view",
+    ])])
+    t = _tuples(join(g, sf))
+    assert ("page/1", "tab/Acme_Console", "url", "high") in t
+    assert ("page/1", "object/MeterPoint__c", "url", "high") in t
+
+
+def test_join_same_confidence_tie_break_is_deterministic():
+    """title and body hits are both medium; the winning via must come from the
+    fixed via ranking (title > body), never from scan order."""
+    g = _cgraph([_page("page/1", "MeterPoint__c", text="MeterPoint__c sync notes")])
+    hits = [e for e in join(g, SF, scan_body=True) if e["dst"] == "object/MeterPoint__c"]
+    assert len(hits) == 1 and hits[0]["via"] == "title"

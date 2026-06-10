@@ -112,3 +112,17 @@ def test_save_graph_redacts_when_asked(tmp_path):
     assert "secret body text" not in out.read_text(encoding="utf-8")
     page = next(n for n in load_graph(out)["nodes"] if n["id"] == "page/ENG/Billing")
     assert page.get("text_redacted") is True and "text" not in page
+
+
+def test_unresolved_and_errors_are_sorted():
+    """Determinism covers the whole file: unresolved/errors come out in a fixed
+    order regardless of insertion order (a parallel build may interleave them)."""
+    u1 = {"src": "b/x", "type": "uses", "to_kind": "k", "to_name": "n", "reason": "r"}
+    u2 = {"src": "a/y", "type": "uses", "to_kind": "k", "to_name": "n", "reason": "r"}
+    e1 = {"source": "sf", "path": "Zed.cls", "error": "E"}
+    e2 = {"source": "sf", "path": "Abc.cls", "error": "E"}
+    fwd = persistence.to_jsonable({"nodes": [], "edges": [], "unresolved": [u1, u2], "errors": [e1, e2]})
+    rev = persistence.to_jsonable({"nodes": [], "edges": [], "unresolved": [u2, u1], "errors": [e2, e1]})
+    assert fwd == rev
+    assert fwd["unresolved"][0]["src"] == "a/y"
+    assert fwd["errors"][0]["path"] == "Abc.cls"

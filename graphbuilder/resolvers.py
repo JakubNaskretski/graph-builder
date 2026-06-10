@@ -10,6 +10,7 @@ A reference whose `to_kind` has **no registered resolver** is reported in
 """
 from __future__ import annotations
 
+from .confluence.parse import page_ref
 from .model import NODE_TYPES
 
 
@@ -59,12 +60,55 @@ class LabelResolver:
         return nid
 
 
+class PageResolver:
+    """Resolver for Confluence pages, whose nodes are **id-keyed**
+    (``page/<pageId>``) while storage-format links can only name their target as
+    ``<space>/<title>`` (that is all ``<ri:page>`` markup carries). Maps the title
+    form back to the collected page's id-keyed node via a (space/title) -> id
+    index over the registry; an unseen target becomes a title-keyed external stub
+    (its real id is unknowable without its dump) — exactly like an off-repo
+    Salesforce reference.
+    """
+
+    kind = "page"
+
+    def __init__(self):
+        self._index: dict[str, str] = {}
+        self._indexed_at = -1  # registry size the index was built at
+
+    def _title_index(self, registry: dict) -> dict[str, str]:
+        # Collected (non-external) pages all exist before resolution starts; the
+        # registry only grows by external stubs during it, so rebuilding whenever
+        # the size changed keeps the index correct at trivial cost.
+        if len(registry) != self._indexed_at:
+            index: dict[str, str] = {}
+            for nid, n in registry.items():
+                if n.get("type") != "page" or n.get("external") or not n.get("space_key"):
+                    continue
+                # first writer wins, mirroring the node registry's setdefault
+                index.setdefault(page_ref(n["space_key"], n.get("label", "")), nid)
+            self._index = index
+            self._indexed_at = len(registry)
+        return self._index
+
+    def resolve(self, name: str, registry: dict) -> str | None:
+        nid = f"page/{name}"
+        if nid in registry:                       # a stub created earlier this pass
+            return nid
+        hit = self._title_index(registry).get(name)
+        if hit:
+            return hit
+        registry[nid] = {"id": nid, "type": "page", "label": name, "external": True}
+        return nid
+
+
 # Every node kind gets an external stub when a target isn't in the repo, EXCEPT
-# `label` (LabelResolver handles it with prefix normalization). Derived from the
-# single node vocabulary so a new type can never be left without a resolver.
-STUB_KINDS = sorted(NODE_TYPES - {"label"})
+# `label` (LabelResolver: prefix normalization) and `page` (PageResolver: title ->
+# page-id mapping). Derived from the single node vocabulary so a new type can
+# never be left without a resolver.
+STUB_KINDS = sorted(NODE_TYPES - {"label", "page"})
 
 
 def default_resolvers() -> list:
-    # `label` is handled by LabelResolver (prefix normalization), not a plain stub.
-    return [StubResolver(k) for k in STUB_KINDS] + [LabelResolver()]
+    # `label` and `page` get their dedicated resolvers, not plain stubs.
+    return [StubResolver(k) for k in STUB_KINDS] + [LabelResolver(), PageResolver()]

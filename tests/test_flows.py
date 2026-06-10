@@ -266,10 +266,13 @@ def test_build_graph_resolves_and_stubs(tmp_path):
                and e["src"] == "flowelement/Acme_Meter_Onboarding.Is_Active"
                and e["dst"] == "field/MeterPoint__c.Active__c" for e in g["edges"])
 
-    # everything wired through stub resolvers; the only unresolved targets are
-    # the `emailalert` kind, which has no resolver here.
-    assert g["errors"] == []
-    assert all(u["to_kind"] == "emailalert" for u in g["unresolved"])
+    # everything wired through stub resolvers — including `emailalert` (vocab
+    # kind; the alert itself is org metadata we don't parse, so it stubs)
+    assert g["errors"] == [] and g["unresolved"] == []
+    assert by_id["emailalert/emailSimple"].get("external") is True
+    assert any(e["type"] == "uses"
+               and e["src"] == "flowelement/Acme_Meter_Onboarding.Send_Email"
+               and e["dst"] == "emailalert/emailSimple" for e in g["edges"])
 
 
 def test_lwc_name_namespace_handling():

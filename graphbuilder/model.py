@@ -18,8 +18,8 @@ NODE_TYPES = {
     "omniscript", "integrationprocedure", "datamapper", "flexcard",
     "label", "approvalprocess", "sharingrule", "app", "tab", "recordtype",
     "aura", "vfpage", "vfcomponent", "quickaction", "layout",
-    "queue", "publicgroup", "role", "emailtemplate", "report", "dashboard",
-    "custompermission", "customnotificationtype",
+    "queue", "publicgroup", "role", "emailtemplate", "emailalert", "report",
+    "dashboard", "custompermission", "customnotificationtype",
     "assignmentrule", "escalationrule", "duplicaterule", "matchingrule",
     # data-model nodes carry structural names only — never field/record values
     "custommetadatarecord", "globalvalueset", "listview", "platformeventchannel",
