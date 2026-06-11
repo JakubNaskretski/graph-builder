@@ -214,3 +214,21 @@ def test_build_graph_in_isolation_resolves_to_stubs(tmp_path):
     assert g["errors"] == []
     # label/resource/messageChannel kinds have no default resolver -> reported, not raised
     assert {u["to_kind"] for u in g["unresolved"]} <= {"label", "resource", "messagechannel"}
+
+def test_template_managed_namespace_children(tmp_path):
+    # Managed-package template tags keep their namespace:
+    # <acme_pkg-card-frame> -> acme_pkg__cardFrame. Platform tags are skipped.
+    html = """
+<template>
+    <acme_pkg-card-frame></acme_pkg-card-frame>
+    <c-acme-reading-card></c-acme-reading-card>
+    <lightning-card></lightning-card>
+</template>
+"""
+    js = "import { LightningElement } from 'lwc';\nexport default class NsHost extends LightningElement {}\n"
+    js_path = _write_bundle(tmp_path, "nsHost", js, html=html)
+    _, edges = LwcExtractor().extract(js_path)
+    comps = {e["to_name"] for e in edges if e["type"] == "uses-component"}
+    assert "acme_pkg__cardFrame" in comps
+    assert "acmeReadingCard" in comps
+    assert "lightning__card" not in comps

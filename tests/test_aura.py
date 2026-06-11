@@ -204,3 +204,28 @@ def test_looks_like_object_namespaced_suffixes():
     # lowercase view bindings / empty are not objects
     assert not _looks_like_object("simpleRecord")
     assert not _looks_like_object("")
+
+def test_managed_namespace_children(tmp_path):
+    # Managed-package refs keep their namespace (<ns:Comp> -> ns__Comp); platform
+    # namespaces (lightning:, ui:, aura:, ...) never become children.
+    cmp = """
+<aura:component>
+    <acme_pkg:CardFrame record="{!v.r}"/>
+    <c:acmeReadingCard/>
+    <lightning:card title="x"/>
+</aura:component>
+"""
+    js = """
+({
+    init : function(component) {
+        $A.createComponent("acme_pkg:Toast", {}, function(cmp){});
+    }
+})
+"""
+    cmp_path = _write_bundle(tmp_path, "nsHost", cmp, js)
+    _, edges = AuraExtractor().extract(cmp_path)
+    comps = {e["to_name"] for e in edges if e["type"] == "uses-component"}
+    assert "acme_pkg__CardFrame" in comps          # markup tag
+    assert "acme_pkg__Toast" in comps              # $A.createComponent
+    assert "acmeReadingCard" in comps              # local c: child unchanged
+    assert not any(c.startswith(("lightning__", "aura__", "ui__")) for c in comps)

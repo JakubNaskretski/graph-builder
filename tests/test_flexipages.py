@@ -121,3 +121,20 @@ def test_build_graph_in_isolation(tmp_path):
     assert any(e["type"] == "embeds" and e["dst"] == "lwc/meterPointDetail"
                for e in g["edges"])
     assert g["errors"] == [] and g["unresolved"] == []
+
+def test_managed_namespace_components(tmp_path):
+    # Managed-package components ("ns:comp") become ns__comp lwc refs; platform
+    # namespaces (flexipage:, runtime_*:) are skipped; local c: is unchanged.
+    p = tmp_path / "AcmePackaged.flexipage-meta.xml"
+    _w(p, _flexipage_xml(
+        "MeterPoint__c",
+        [
+            "c:meterPointDetail",
+            "acme_pkg:cardCanvas",
+            "flexipage:availableForAllPageTypes",
+            "runtime_sales_activities:activityPanel",
+        ],
+    ))
+    _, edges = FlexiPageExtractor().extract(p)
+    lwcs = {e["to_name"] for e in edges if e["to_kind"] == "lwc"}
+    assert lwcs == {"meterPointDetail", "acme_pkg__cardCanvas"}
