@@ -15,6 +15,11 @@ import argparse
 import json
 import sys
 
+import sys
+
+# allow running straight from a checkout/unpack — no install needed
+sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1]))
+
 from graphbuilder import load_graph, save_graph
 from graphbuilder.confluence import join, merge
 

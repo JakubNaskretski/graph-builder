@@ -15,6 +15,11 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+import sys
+
+# allow running straight from a checkout/unpack — no install needed
+sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1]))
+
 from graphbuilder import build_graph
 
 # Display tables only — folder grouping and edge wording, not the source of

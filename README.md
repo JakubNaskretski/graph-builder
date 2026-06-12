@@ -44,9 +44,9 @@ build_file("force-app/classes/MyClass.cls", levels=3, repo="force-app")
 Or from the command line:
 
 ```sh
-python -m graphbuilder path/to/force-app -o graph.json    # also: graph-builder ...
-python -m graphbuilder path/to/MyClass.cls --levels 2 --repo path/to/force-app
-python -m graphbuilder path/to/MyClass.cls --types apexmethod
+python3 -m graphbuilder path/to/force-app -o graph.json    # also: graph-builder ...
+python3 -m graphbuilder path/to/MyClass.cls --levels 2 --repo path/to/force-app
+python3 -m graphbuilder path/to/MyClass.cls --types apexmethod
 ```
 
 ### One-command pipeline
@@ -121,15 +121,15 @@ See `graphbuilder/confluence/`.
 
 ```sh
 # 1. collect a space into a local, gitignored dump (token from $CONFLUENCE_TOKEN ONLY)
-CONFLUENCE_TOKEN=… python scripts/confluence_collect.py \
+CONFLUENCE_TOKEN=… python3 scripts/confluence_collect.py \
     --base-url https://wiki.example.internal --space ENG,OPS --out confluence-dump/
 
 # 2. build a Confluence graph with the ordinary builder — only the Confluence
 #    extractor matches *.page.json, so you get a Confluence-only graph
-python -m graphbuilder confluence-dump/ -o confluence-dump/confluence-graph.json
+python3 -m graphbuilder confluence-dump/ -o confluence-dump/confluence-graph.json
 
 # 3. join it to a Salesforce graph — page --documents--> the object/class it references
-python scripts/confluence_join.py confluence-dump/confluence-graph.json sf-graph.json -o joined.json
+python3 scripts/confluence_join.py confluence-dump/confluence-graph.json sf-graph.json -o joined.json
 ```
 
 - **Nodes** `space` · `page` (id-keyed — rename-stable; blog posts too, marked
@@ -167,7 +167,7 @@ JIRA_TOKEN=… python scripts/jira_collect.py \
 # the strongest issue->Confluence-page signal)
 
 # 2. build a Jira graph with the ordinary builder
-python -m graphbuilder jira-dump/ -o jira-dump/jira-graph.json
+python3 -m graphbuilder jira-dump/ -o jira-dump/jira-graph.json
 ```
 
 - **Nodes** `jiraproject` · `jiraissue` (keyed by Jira's stable issue key; summary
@@ -192,7 +192,7 @@ store** of flat files the graph points into. Under the no-DB constraint the grap
 the retrieval index — following edges gives structural recall a flat dump can't.
 
 ```sh
-python scripts/build_bundle.py --salesforce path/to/force-app \
+python3 scripts/build_bundle.py --salesforce path/to/force-app \
     --confluence confluence-dump/ --out knowledge-base/
 # or all three sources behind one command:
 graph-builder pipeline --salesforce force-app --confluence-dump confluence-dump \

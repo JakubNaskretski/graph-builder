@@ -18,6 +18,11 @@ from __future__ import annotations
 import argparse
 import sys
 
+import sys
+
+# allow running straight from a checkout/unpack — no install needed
+sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1]))
+
 from graphbuilder.bundle import build_bundle
 
 
