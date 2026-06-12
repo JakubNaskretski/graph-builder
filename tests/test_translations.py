@@ -72,3 +72,28 @@ def test_locale_attr_is_normalized(tmp_path):
     g = build_graph(tmp_path)
     n = next(x for x in g["nodes"] if x["id"] == "label/Greeting")
     assert n["label_en_us"] == "Hi"
+
+
+def test_bom_and_leading_junk_tolerated(tmp_path):
+    """Real exports sometimes carry a BOM or stray newlines before the XML
+    declaration — those must parse; a genuinely malformed file must land in
+    build errors, not vanish."""
+    fa = tmp_path / "force-app" / "main" / "default"
+    tdir = fa / "objectTranslations" / "MeterPoint__c-pl"
+    (tdir).mkdir(parents=True)
+    bom = b'\xef\xbb\xbf<?xml version="1.0" encoding="UTF-8"?>\n' \
+          b"<CustomFieldTranslation><name>Reading__c</name>" \
+          b"<label>Odczyt</label></CustomFieldTranslation>"
+    (tdir / "Reading__c.fieldTranslation-meta.xml").write_bytes(bom)
+    junk = b"\n\n<?xml version=\"1.0\"?><CustomObjectTranslation>" \
+           b"<caseValues><plural>false</plural><value>Punkt</value></caseValues>" \
+           b"</CustomObjectTranslation>"
+    (tdir / "MeterPoint__c-pl.objectTranslation-meta.xml").write_bytes(junk)
+    broken = fa / "translations" / "pl.translation-meta.xml"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("<Translations><customLabels><name>X</name>")  # truncated
+    g = build_graph(tmp_path)
+    by_id = {n["id"]: n for n in g["nodes"]}
+    assert by_id["field/MeterPoint__c.Reading__c"]["label_pl"] == "Odczyt"
+    assert by_id["object/MeterPoint__c"]["label_pl"] == "Punkt"
+    assert len(g["errors"]) == 1 and "pl.translation" in g["errors"][0]["path"]
