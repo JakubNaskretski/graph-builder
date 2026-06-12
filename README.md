@@ -104,6 +104,16 @@ record data, formulas, endpoints, or credentials. Leakage-prone metadata (Named
 Credentials, Static Resources) is deliberately not graphed, and SOQL/SOSL is walked
 for object/field identifiers only. Tests use fictional sample data.
 
+The skip list is policy, not an accident: **NamedCredential, ExternalCredential,
+RemoteSiteSetting, ConnectedApp, certs and IframeWhiteListUrlSettings** carry
+endpoints/secrets and must never gain an extractor. Settings and `*Translations`
+metadata are skipped as low-signal noise. Managed-package metadata (`ns__`
+prefixed) is graphed like any other when it is present in the retrieve; Data
+Cloud objects (`__dlm`/`__dll`) are out of scope. Every emitted node carries a
+`source_path` back to the file that defined it (decomposed children point at
+their own `fields/…`/`recordTypes/…` files), so a consumer can always step from
+the graph into the underlying source.
+
 ## Confluence (a second, joinable source)
 graph-builder can also ingest an on-prem **Confluence** space as its own graph and
 — deliberately, on demand — link pages to the Salesforce entities they document.

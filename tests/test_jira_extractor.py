@@ -29,13 +29,18 @@ def _et(edges):
 
 BUG = {
     "id": "10001", "key": "ACME-101",
+    "self": "https://jira.example.internal/rest/api/2/issue/10001",
     "fields": {
         "summary": "MeterPoint sync drops readings",
         "description": "Fails for MeterPoint__c. cc [~jdoe]",
         "issuetype": {"name": "Bug"}, "status": {"name": "Open"},
+        "priority": {"name": "High"}, "resolution": {"name": "Fixed"},
         "labels": ["billing"],
+        "components": [{"name": "Billing"}],
+        "fixVersions": [{"name": "2026.06"}],
         "assignee": {"name": "msmith"}, "reporter": {"name": "jdoe"},
         "project": {"key": "ACME", "name": "Acme Platform"},
+        "created": "2026-05-20T09:00:00.000+0000",
         "updated": "2026-06-01T10:00:00.000+0000",
         "issuelinks": [{"type": {"name": "Blocks"}, "outwardIssue": {"key": "ACME-102"}}],
         "subtasks": [{"key": "ACME-103"}],
@@ -57,9 +62,29 @@ def test_extract_nodes_and_attrs(tmp_path):
     assert issue["label"] == "MeterPoint sync drops readings"   # summary as label
     assert issue["project_key"] == "ACME" and issue["issue_type"] == "Bug"
     assert issue["status"] == "Open" and issue.get("text")
+    assert issue["priority"] == "High" and issue["resolution"] == "Fixed"
+    assert issue["created"] == "2026-05-20T09:00:00.000+0000"
+    assert issue["rest_id"] == "10001"                          # REST identity
+    assert issue["url"] == "https://jira.example.internal/browse/ACME-101"
     assert ids["jiraproject/ACME"]["label"] == "Acme Platform"
     assert "jiralabel/billing" in ids
     assert "jirauser/msmith" in ids and "jirauser/jdoe" in ids
+    # envelope target nodes, emitted like jiralabel (label = name, source jira)
+    ver = ids["jiraversion/2026.06"]
+    assert ver["type"] == "jiraversion" and ver["label"] == "2026.06"
+    assert ver["source"] == "jira"
+    comp = ids["jiracomponent/Billing"]
+    assert comp["type"] == "jiracomponent" and comp["label"] == "Billing"
+    assert comp["source"] == "jira"
+
+
+def test_extract_attrs_absent_when_empty(tmp_path):
+    minimal = {"key": "ACME-9", "fields": {"summary": "S",
+                                           "project": {"key": "ACME"}}}
+    nodes, _ = EX.extract(_w(tmp_path, "ACME-9.issue.json", minimal))
+    issue = _ids(nodes)["jiraissue/ACME-9"]
+    for attr in ("priority", "resolution", "created", "url"):
+        assert attr not in issue
 
 
 def test_extract_edges(tmp_path):
@@ -70,9 +95,35 @@ def test_extract_edges(tmp_path):
     assert (iid, "links-to", "jiraissue", "ACME-102") in et      # issue link
     assert (iid, "links-to", "jiraissue", "ACME-103") in et      # subtask
     assert (iid, "labeled", "jiralabel", "billing") in et
+    assert (iid, "fixed-in", "jiraversion", "2026.06") in et     # release
+    assert (iid, "component-of", "jiracomponent", "Billing") in et
     assert (iid, "assigned-to", "jirauser", "msmith") in et
     assert (iid, "authored-by", "jirauser", "jdoe") in et
     assert (iid, "mentions", "jirauser", "jdoe") in et
+
+
+def test_extract_epic_and_sprint_via_fields_file(tmp_path):
+    """With the collector's _fields.json present, the issue gains in-sprint plus a
+    child-of to its epic — ALONGSIDE the project containment edge."""
+    (tmp_path / "_fields.json").write_text(json.dumps(
+        {"customfield_10100": "Epic Link", "customfield_10101": "Sprint"}), "utf-8")
+    story = {"key": "ACME-7", "fields": {
+        "summary": "Story", "issuetype": {"name": "Story"},
+        "project": {"key": "ACME"},
+        "customfield_10100": "ACME-50",
+        "customfield_10101": [
+            "com.atlassian.greenhopper.service.sprint.Sprint@1f"
+            "[id=5,rapidViewId=2,state=ACTIVE,name=Sprint 7,goal=Meter sync]"],
+    }}
+    nodes, edges = EX.extract(_w(tmp_path, "ACME-7.issue.json", story))
+    et = _et(edges)
+    iid = "jiraissue/ACME-7"
+    assert (iid, "child-of", "jiraissue", "ACME-50") in et       # epic membership
+    assert (iid, "child-of", "jiraproject", "ACME") in et        # project kept too
+    assert (iid, "in-sprint", "jirasprint", "Sprint 7") in et
+    spr = _ids(nodes)["jirasprint/Sprint 7"]
+    assert spr["type"] == "jirasprint" and spr["label"] == "Sprint 7"
+    assert spr["source"] == "jira"
 
 
 def test_subtask_is_child_of_parent_issue(tmp_path):
@@ -100,6 +151,10 @@ def test_build_graph_resolves_links_and_stubs(tmp_path):
     assert ids["jiraissue/ACME-102"].get("external") is not True
     assert ("jiraissue/ACME-101", "links-to", "jiraissue/ACME-102") in edges
     assert ids["jiraissue/ACME-103"].get("external") is True
+    # envelope targets are emitted with the issue, so they resolve to real nodes
+    assert ("jiraissue/ACME-101", "fixed-in", "jiraversion/2026.06") in edges
+    assert ids["jiraversion/2026.06"].get("external") is not True
+    assert ("jiraissue/ACME-101", "component-of", "jiracomponent/Billing") in edges
 
 
 def test_never_raises_on_broken_content(tmp_path):
