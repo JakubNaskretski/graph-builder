@@ -203,7 +203,149 @@ def test_overloads_collapse_to_one_node():
     nodes, _ = EX.extract(f)
     mids = [n["id"] for n in nodes if n["type"] == "apexmethod"]
     assert mids == ["apexmethod/AcmeCalc.add"]                 # collapsed
-    assert "auraenabled" in _ids(nodes)["apexmethod/AcmeCalc.add"]["annotations"]
+    add = _ids(nodes)["apexmethod/AcmeCalc.add"]
+    assert "auraenabled" in add["annotations"]
+    # the single node records how many declarations were seen, and the FIRST
+    # declaration's signature wins for the attrs
+    assert add["overloads"] == 2
+    assert add["return_type"] == "Decimal"
+    assert add["visibility"] == "public"
+    assert add["is_static"] is True
+    assert add["parameters"] == [{"type": "Decimal", "name": "a"},
+                                 {"type": "Decimal", "name": "b"}]
+
+
+# A multi-method class exercising the signature attrs on both backends:
+# visibility, static, return types (incl. nested generics), parameters (a
+# generic param whose inner comma must NOT split it), a constructor, and a
+# method with no stated modifiers.
+SIGNATURES = """public without sharing class AcmeTariffEngine {
+    public static Map<Id, List<Reading__c>> readingsByMeter(Map<Id ,List<Account>> byAcct, Integer max) {
+        return null;
+    }
+    private List<Rate__c> activeRates(String regionCode) { return null; }
+    protected virtual void applyTariff(Rate__c rate) {}
+    global Boolean isLive() { return true; }
+    Integer bare() { return 0; }
+    public AcmeTariffEngine(String mode) {}
+}
+"""
+
+
+def _assert_signature_attrs(ids):
+    """Signature assertions shared by the regex and AST backend tests."""
+    pre = "apexmethod/AcmeTariffEngine."
+
+    m = ids[pre + "readingsByMeter"]
+    assert m["visibility"] == "public"
+    assert m["is_static"] is True
+    assert m["return_type"] == "Map<Id, List<Reading__c>>"
+    # generic param with an inner comma stays ONE parameter, whitespace normalised
+    assert m["parameters"] == [
+        {"type": "Map<Id, List<Account>>", "name": "byAcct"},
+        {"type": "Integer", "name": "max"},
+    ]
+
+    m = ids[pre + "activeRates"]
+    assert m["visibility"] == "private"
+    assert "is_static" not in m                       # omitted when not static
+    assert m["return_type"] == "List<Rate__c>"
+    assert m["parameters"] == [{"type": "String", "name": "regionCode"}]
+
+    m = ids[pre + "applyTariff"]
+    assert m["visibility"] == "protected"
+    assert m["return_type"] == "void"
+
+    m = ids[pre + "isLive"]
+    assert m["visibility"] == "global"
+    assert m["return_type"] == "Boolean"
+    assert "parameters" not in m                      # omitted when empty
+
+    m = ids[pre + "bare"]
+    assert "visibility" not in m                      # omitted when unstated
+    assert m["return_type"] == "Integer"
+
+    # not overloaded -> no overloads attr anywhere
+    assert all("overloads" not in n for n in ids.values())
+    # class-level sharing modifier
+    assert ids["apexclass/AcmeTariffEngine"]["sharing"] == "without"
+
+
+def test_method_signature_attrs_regex_backend():
+    f = _w(Path("/tmp/_acme_apex/AcmeTariffEngine.cls"), SIGNATURES)
+    ids = _ids(EX._extract_regex(f)[0])
+    _assert_signature_attrs(ids)
+    # constructor: kept as a method node, visibility recorded, NO return_type
+    ctor = ids["apexmethod/AcmeTariffEngine.AcmeTariffEngine"]
+    assert ctor["visibility"] == "public"
+    assert "return_type" not in ctor
+    assert ctor["parameters"] == [{"type": "String", "name": "mode"}]
+
+
+@ast_only
+def test_method_signature_attrs_ast_backend():
+    f = _w(Path("/tmp/_acme_apex/AcmeTariffEngine.cls"), SIGNATURES)
+    ids = _ids(EX._extract_ast(f)[0])
+    _assert_signature_attrs(ids)
+    # AST-only precision: 1-based start/end lines on every method node
+    m = ids["apexmethod/AcmeTariffEngine.readingsByMeter"]
+    assert (m["start_line"], m["end_line"]) == (2, 4)
+    m = ids["apexmethod/AcmeTariffEngine.activeRates"]
+    assert (m["start_line"], m["end_line"]) == (5, 5)
+
+
+def test_class_sharing_attr_both_backends():
+    cases = [
+        ("public with sharing class Sh0 { void e(){} }", "with"),
+        ("public without sharing class Sh1 { void e(){} }", "without"),
+        ("public inherited sharing class Sh2 { void e(){} }", "inherited"),
+        ("public class Sh3 { void e(){} }", None),
+    ]
+    for i, (src, expected) in enumerate(cases):
+        f = _w(Path(f"/tmp/_acme_apex/Sh{i}.cls"), src)
+        cid = f"apexclass/Sh{i}"
+        rgx = _ids(EX._extract_regex(f)[0])
+        if expected is None:
+            assert "sharing" not in rgx[cid], f"regex: {src!r}"
+        else:
+            assert rgx[cid]["sharing"] == expected, f"regex: {src!r}"
+        if AST_AVAILABLE:
+            astn = _ids(EX._extract_ast(f)[0])
+            if expected is None:
+                assert "sharing" not in astn[cid], f"ast: {src!r}"
+            else:
+                assert astn[cid]["sharing"] == expected, f"ast: {src!r}"
+
+
+def test_inner_class_sharing_never_leaks_to_top_class():
+    src = ("public class AcmeOuter {\n"
+           "  public without sharing class Inner { void e(){} }\n"
+           "}\n")
+    f = _w(Path("/tmp/_acme_apex/AcmeOuter.cls"), src)
+    rgx = _ids(EX._extract_regex(f)[0])
+    assert "sharing" not in rgx["apexclass/AcmeOuter"]
+    if AST_AVAILABLE:
+        astn = _ids(EX._extract_ast(f)[0])
+        assert "sharing" not in astn["apexclass/AcmeOuter"]
+
+
+def test_interface_method_signature_attrs_both_backends():
+    """Interface methods (semicolon bodies, no access modifiers) are still
+    emitted and carry return_type/parameters; visibility stays omitted."""
+    src = ("public interface AcmeRater {\n"
+           "    Decimal rate(MeterPoint__c mp, Map<Id, List<Account>> ctx);\n"
+           "}\n")
+    f = _w(Path("/tmp/_acme_apex/AcmeRater.cls"), src)
+    expected_params = [
+        {"type": "MeterPoint__c", "name": "mp"},
+        {"type": "Map<Id, List<Account>>", "name": "ctx"},
+    ]
+    for backend in [EX._extract_regex] + ([EX._extract_ast] if AST_AVAILABLE else []):
+        ids = _ids(backend(f)[0])
+        m = ids["apexmethod/AcmeRater.rate"]
+        assert m["return_type"] == "Decimal"
+        assert m["parameters"] == expected_params
+        assert "visibility" not in m and "is_static" not in m
 
 
 def test_handles():
