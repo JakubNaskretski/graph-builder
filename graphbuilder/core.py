@@ -116,9 +116,10 @@ class GraphBuilder:
         Every emitted node is stamped with ``source_path`` — the file it came
         from, relative to ``root`` when given (POSIX separators), else the path
         as passed — so a graph node can always be traced back to its base
-        source. ``setdefault`` semantics: an extractor that sets its own
-        ``source_path`` wins, and for a node emitted from several files the
-        registry keeps the first file seen (matching node-registry first-wins)."""
+        source. An extractor that sets its own ``source_path`` (e.g. a
+        decomposed child file) wins, relativized the same way; for a node
+        emitted from several files the registry keeps the first file seen
+        (matching node-registry first-wins)."""
         root = Path(root) if root is not None else None
         extracted: list[tuple] = []
         errors: list[dict] = []
@@ -141,7 +142,10 @@ class GraphBuilder:
                 continue
             src = _source_path(path, root)
             for n in nodes or []:
-                n.setdefault("source_path", src)
+                sp = n.get("source_path")
+                # extractor-set paths win but get the same relativization (an
+                # already-relative value passes through _source_path unchanged)
+                n["source_path"] = src if sp is None else _source_path(Path(sp), root)
             extracted.append((path, nodes or [], edges or []))
         return extracted, errors
 

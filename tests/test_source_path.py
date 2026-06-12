@@ -50,6 +50,27 @@ def test_build_files_without_root_keeps_given_path(tmp_path):
     assert node["source_path"] == cls.as_posix()
 
 
+def test_decomposed_children_point_at_their_own_files(tmp_path):
+    """Fields/record types from a decomposed object trace to their OWN
+    .field-meta.xml / .recordType-meta.xml, not the parent object file."""
+    obj = tmp_path / "force-app" / "main" / "default" / "objects" / "MeterPoint__c"
+    _w(obj / "MeterPoint__c.object-meta.xml",
+       "<CustomObject><label>Meter Point</label></CustomObject>")
+    _w(obj / "fields" / "Reading__c.field-meta.xml",
+       "<CustomField><fullName>Reading__c</fullName><type>Number</type></CustomField>")
+    _w(obj / "recordTypes" / "Standard.recordType-meta.xml",
+       "<RecordType><fullName>Standard</fullName></RecordType>")
+    g = build_graph(tmp_path)
+    by_id = {n["id"]: n for n in g["nodes"]}
+    base = "force-app/main/default/objects/MeterPoint__c"
+    assert by_id["field/MeterPoint__c.Reading__c"]["source_path"] == \
+        f"{base}/fields/Reading__c.field-meta.xml"
+    assert by_id["recordtype/MeterPoint__c.Standard"]["source_path"] == \
+        f"{base}/recordTypes/Standard.recordType-meta.xml"
+    assert by_id["object/MeterPoint__c"]["source_path"] == \
+        f"{base}/MeterPoint__c.object-meta.xml"
+
+
 def test_extractor_supplied_source_path_wins(tmp_path):
     class Dummy:
         source = "dummy"
