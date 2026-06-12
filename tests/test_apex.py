@@ -740,3 +740,53 @@ def test_ast_emits_constructors_like_regex(tmp_path):
     assert ctor["visibility"] == "public"
     assert ctor["parameters"] == [{"type": "Id", "name": "siteId"}]
     assert ctor["start_line"] == 2
+
+
+@ast_only
+def test_property_style_binding_is_shimmed(tmp_path):
+    """A pre-0.25 (property-style, bytes-only) binding must yield the exact
+    same extraction through the compatibility shim as the native parser."""
+    real = apexmod._APEX_PARSER
+
+    class PropNode:   # property-style facade over a method-style node
+        def __init__(self, n): self._n = n
+        @property
+        def type(self): return self._n.kind()
+        @property
+        def child_count(self): return self._n.child_count()
+        @property
+        def children(self):
+            return [PropNode(self._n.child(i)) for i in range(self._n.child_count())]
+        def child_by_field_name(self, name):
+            c = self._n.child_by_field_name(name)
+            return None if c is None else PropNode(c)
+        @property
+        def start_byte(self): return self._n.start_byte()
+        @property
+        def end_byte(self): return self._n.end_byte()
+
+    class PropTree:
+        def __init__(self, t): self._t = t
+        @property
+        def root_node(self): return PropNode(self._t.root_node())
+
+    class PropParser:
+        def parse(self, src):
+            if isinstance(src, str):
+                raise TypeError("source must be a bytestring or a callable")
+            return PropTree(real.parse(src.decode("utf-8")))
+
+    shimmed = apexmod._adapt_property_api(PropParser())
+    assert shimmed is not None
+
+    f = tmp_path / "MeterPointService.cls"
+    f.write_text(
+        "public with sharing class MeterPointService {\n"
+        "  @AuraEnabled public static List<MeterPoint__c> fetch(Id siteId) {\n"
+        "    return [SELECT Name, Reading__c FROM MeterPoint__c WHERE Site__c = :siteId];\n"
+        "  }\n"
+        "}\n", "utf-8")
+    from graphbuilder.extractors.apex._ast import extract_ast
+    native = extract_ast(real, f)
+    via_shim = extract_ast(shimmed, f)
+    assert via_shim == native
