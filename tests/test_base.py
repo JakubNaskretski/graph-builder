@@ -12,10 +12,11 @@ def _w(p, text):
 
 def test_stub_kinds_track_the_vocabulary():
     """STUB_KINDS derives from NODE_TYPES, so a new node type can never be left
-    without a resolver. Every type gets a stub except `label` (LabelResolver)
-    and `page` (PageResolver: title-form -> page-id mapping)."""
-    assert set(STUB_KINDS) == NODE_TYPES - {"label", "page"}
-    assert "label" not in STUB_KINDS and "page" not in STUB_KINDS
+    without a resolver. Every type gets a stub except the dedicated resolvers:
+    `label` (prefix normalization), `page` (title-form -> page-id mapping), and
+    the schema-aware `object` / `apexmethod` (platform-noise suppression)."""
+    assert set(STUB_KINDS) == NODE_TYPES - {"label", "page", "object", "apexmethod"}
+    assert not {"label", "page", "object", "apexmethod"} & set(STUB_KINDS)
     # the LWC dependency stub targets are part of the vocabulary, not just resolver-only
     assert {"resource", "messagechannel"} <= NODE_TYPES
 
