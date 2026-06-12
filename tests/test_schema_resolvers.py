@@ -101,3 +101,26 @@ def test_build_suppresses_noise_keeps_structure(tmp_path):
     assert "object/Acme__c" in ids and "field/Acme__c.Total__c" in ids
     assert ("apexclass/AcmeSvc", "calls", "apexmethod/AcmeHelper.persist") in edges
     assert g["unresolved"] == []   # drops are silent, not unresolved noise
+
+
+# --------------------------------------------------------------------------- #
+# case-insensitivity — Apex/SOQL don't care about case; the drop checks can't either
+# --------------------------------------------------------------------------- #
+def test_apexmethod_shadowing_is_case_insensitive():
+    """`string.write()` with a declared class `String` is shadowed, not noise."""
+    r = ApexMethodResolver()
+    reg = {"apexclass/String": {"id": "apexclass/String", "type": "apexclass"}}
+    assert r.resolve("string.write", reg) == "apexmethod/string.write"
+    # unshadowed platform call still drops regardless of its casing
+    assert ApexMethodResolver().resolve("STRING.valueOf", {}) is False
+
+
+def test_object_drop_is_case_insensitive_both_ways():
+    r = ObjectResolver()
+    reg = {"field/Acme__c.Total__c": {"id": "field/Acme__c.Total__c",
+                                      "type": "field"}}
+    # a differently-cased field token is still recognized as noise
+    assert r.resolve("TOTAL__C", reg) is False
+    # ... but a differently-cased DECLARED object protects against the drop
+    reg["object/Total__c"] = {"id": "object/Total__c", "type": "object"}
+    assert ObjectResolver().resolve("total__c", reg) is not False

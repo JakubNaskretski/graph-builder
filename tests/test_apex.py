@@ -721,3 +721,22 @@ def test_regex_fallback_build_graph_resolves(monkeypatch, tmp_path):
     assert ("apexclass/AcmeMeterPointService", "extends", "apexclass/BaseService") in edges
     assert ("apexclass/AcmeMeterPointService", "contains",
             "apexmethod/AcmeMeterPointService.recalc") in edges
+
+
+@ast_only
+def test_ast_emits_constructors_like_regex(tmp_path):
+    """Superset parity: the AST backend emits constructor nodes (named like the
+    class, no return_type) exactly as the regex backend always has."""
+    f = tmp_path / "MeterPointService.cls"
+    f.write_text(
+        "public with sharing class MeterPointService {\n"
+        "  public MeterPointService(Id siteId) { this.site = siteId; }\n"
+        "  private Id site;\n"
+        "}\n", "utf-8")
+    nodes, _ = apexmod.EXTRACTORS[0].extract(f)
+    ctor = next(n for n in nodes
+                if n["id"] == "apexmethod/MeterPointService.MeterPointService")
+    assert "return_type" not in ctor
+    assert ctor["visibility"] == "public"
+    assert ctor["parameters"] == [{"type": "Id", "name": "siteId"}]
+    assert ctor["start_line"] == 2
