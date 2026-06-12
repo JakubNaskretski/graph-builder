@@ -184,35 +184,53 @@ python3 -m graphbuilder jira-dump/ -o jira-dump/jira-graph.json
 - Same confidentiality posture: dumps and built Jira graphs hold real issue text —
   gitignored, never committed or egressed.
 
-## Office documents (a `docs` source — .docx / .xlsx)
+## Office documents (a `docs` source — .docx / .xlsx / .pdf)
 
 Loose specification documents and mapping workbooks digest into their own
 separate graph — no collect step, the files themselves are the source (stdlib
-`zipfile` + `xml.etree`, no new dependencies). Only OOXML is read: legacy binary
+`zipfile` + `xml.etree` for the OOXML formats, no required dependencies; PDF
+needs the optional `pdf` extra, see below). Only OOXML is read: legacy binary
 `.doc` / `.xls` and `.xlsb` are rejected by `handles()`; macro-enabled `.xlsm`
 is handled like `.xlsx` with a `has_macros` attr (macro content is never read).
 
 - **Nodes** `docfile` (content-hash id `docfile/<sha1-12>` — rename-stable, dedup
   natural; filename as label; `doc_type` / `structure` / `title` / `modified`
-  attrs) · `docsection` (Word; ordinal-stable ids `docsection/<sha1-12>#<n>`,
-  heading text as label, section body text as the deliberate content capture,
-  like Confluence page bodies) · `sheet` (`sheet/<sha1-12>#<name>`, row/col
-  extent) · `datatable` (declared Excel Tables — their header row is *declared*,
-  not guessed); **edges** reuse `contains` (docfile → section/sheet, sheet →
-  datatable) and `child-of` (section → parent section). Column headers are a
-  `columns` **attr** on section/sheet/table nodes — a node per column is noise.
+  attrs) · `docsection` (Word headings + PDF outline entries; ordinal-stable ids
+  `docsection/<sha1-12>#<n>`, heading text as label, section body text as the
+  deliberate content capture, like Confluence page bodies) · `sheet`
+  (`sheet/<sha1-12>#<name>`, row/col extent) · `datatable` (declared Excel
+  Tables — their header row is *declared*, not guessed); **edges** reuse
+  `contains` (docfile → section/sheet, sheet → datatable) and `child-of`
+  (section → parent section). Column headers are a `columns` **attr** on
+  section/sheet/table nodes — a node per column is noise.
 - **Structure detection is tiered, never guessed uniformly** (`structure` attr):
   - **declared** — Word `w:pStyle` Heading1–9 / Title or an explicit
-    `w:outlineLvl`; Excel Table parts (`xl/tables/*.xml`) — trusted as-is;
+    `w:outlineLvl`; Excel Table parts (`xl/tables/*.xml`); the PDF document
+    outline (bookmarks) — trusted as-is;
   - **heuristic** — Word bold-short-paragraph sections (< 80 chars, all-bold, no
     trailing period), applied **only when the document declares zero headings**
     (tiers never mix in one text flow); Excel first-row-as-header on table-less
     sheets, accepted only when the row is all-string, non-empty and unique AND
     is pinned by a frozen top pane or confirmed by type contrast in the rows
     below. Every heuristic result carries `confidence: "heuristic"`;
-  - **none** — an honest flat `docfile` (Word: body text on the node; Excel:
-    sheet dimensions only). Structure is never fabricated; losing it costs
-    navigation, not knowledge — the raw file keeps everything.
+  - **none** — an honest flat `docfile` (Word/PDF: full text on the node;
+    Excel: sheet dimensions only). Structure is never fabricated; losing it
+    costs navigation, not knowledge — the raw file keeps everything.
+- **PDF needs the optional `pdf` extra** (`pip install graph-builder[pdf]` —
+  pure-python `pypdf`, like the Apex extractor's optional `ast` extra); without
+  it the PDF extractor is **inert**: `handles()` returns False and `.pdf` files
+  are skipped silently (no error entries), every other format unaffected. The
+  outline (bookmarks) is the declared structure: one `docsection` per entry,
+  level from nesting depth, `page_start`/`page_end` (1-based) from the bookmark
+  targets — a section runs to the page before the next same-or-higher-level
+  entry, and its `text` is the extracted text of that page range. No outline →
+  flat docfile with the whole document text (font-size heading heuristics are
+  deliberately not v1 — PDF has no heuristic tier). A scanned PDF (pages but no
+  extractable text) gets `needs_ocr: true` and no `text` attr — OCR is the
+  caller's call, an empty capture is never passed off as knowledge. An
+  **encrypted PDF becomes an `errors` entry** (the extractor raises), never a
+  silent skip. `page_count` / `title` / `modified` attrs; document-info
+  author/creator fields are never read.
 - **The Excel value-zoo is neutralized by policy, not parsing heroics:** NAMES
   only (sheet / table / column / defined names) — cell values and formula bodies
   never enter the graph. Word tables contribute their first-row cells as the
@@ -222,10 +240,10 @@ is handled like `.xlsx` with a `has_macros` attr (macro content is never read).
   like Confluence `jira_keys`; in workbooks only the captured *names* are
   scanned, so a cell value can never ride in inside a matched ref.
 
-> **Content & confidentiality.** Word section text is captured (like page
-> bodies), so built `docs` graphs are sensitive — gitignored, never committed or
-> egressed. Author names are never read from `docProps` (anonymization by
-> default).
+> **Content & confidentiality.** Word section text and PDF page text are
+> captured (like page bodies), so built `docs` graphs are sensitive —
+> gitignored, never committed or egressed. Author names are never read from
+> `docProps` or the PDF document info (anonymization by default).
 
 ## Knowledge-base bundle (portable, zip + text, no DB)
 Package one or both sources into a self-contained **knowledge base** — a zip of
