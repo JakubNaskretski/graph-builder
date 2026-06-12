@@ -19,7 +19,7 @@ dev = ["pytest>=8"]
 # versions are capped so a binding-changing upgrade isn't pulled in silently. The
 # runtime probe in extractors/apex.py is the backstop — it disables the AST backend
 # (regex stays) on any node-API mismatch, so a bump here is safe to try.
-ast = ["tree-sitter>=0.21,<1", "tree-sitter-language-pack>=0.1,<2"]
+ast = ["tree-sitter>=0.21,<1", "tree-sitter-language-pack>=1,<2"]
 
 [build-system]
 requires = ["setuptools>=68"]
