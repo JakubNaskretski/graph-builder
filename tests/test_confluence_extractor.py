@@ -180,6 +180,68 @@ def test_blogpost_marked_on_node(tmp_path):
     assert ("page/9", "child-of", "space", "ENG") in _et(edges)   # blog posts don't nest
 
 
+def test_ancestors_attr_root_first(tmp_path):
+    data = {**CHILD, "id": "102", "title": "Deep Page",
+            "ancestors": [{"id": "100", "title": "Acme Platform"},      # root first,
+                          {"id": "101", "title": "MeterPoint Sync"}]}   # parent last
+    nodes, edges = EX.extract(_w(tmp_path, "102.page.json", data))
+    page = _ids(nodes)["page/102"]
+    assert page["ancestors"] == ["100", "101"]            # ids, same order as REST
+    assert all(isinstance(a, str) for a in page["ancestors"])
+    # the child-of edge still targets the IMMEDIATE parent only
+    assert ("page/102", "child-of", "page", "ENG/MeterPoint Sync") in _et(edges)
+
+
+def test_no_ancestors_attr_on_top_level_page(tmp_path):
+    data = {"id": "100", "title": "Acme Platform", "space": {"key": "ENG"},
+            "body": {"storage": {"value": "root"}}}
+    nodes, _ = EX.extract(_w(tmp_path, "100.page.json", data))
+    assert "ancestors" not in _ids(nodes)["page/100"]
+
+
+def test_created_updated_attrs_and_tolerated_absence(tmp_path):
+    rich = {"id": "60", "title": "Spec", "space": {"key": "ENG"},
+            "history": {"createdDate": "2024-02-01T09:30:00.000Z"},
+            "version": {"number": 2, "when": "2025-11-20T14:05:00.000Z"},
+            "body": {"storage": {"value": "x"}}}
+    nodes, _ = EX.extract(_w(tmp_path, "60.page.json", rich))
+    page = _ids(nodes)["page/60"]
+    assert page["created"] == "2024-02-01T09:30:00.000Z"
+    assert page["updated"] == "2025-11-20T14:05:00.000Z"
+
+    bare = {"id": "61", "title": "No History", "space": {"key": "ENG"},
+            "body": {"storage": {"value": "x"}}}
+    nodes, _ = EX.extract(_w(tmp_path, "61.page.json", bare))
+    page = _ids(nodes)["page/61"]
+    assert "created" not in page and "updated" not in page
+
+
+def test_tiny_link_attr_only_never_an_edge(tmp_path):
+    data = {"id": "70", "title": "Shortcuts", "space": {"key": "ENG"},
+            "body": {"storage": {"value":
+                '<a href="/x/AbCd9">one</a> '
+                '<a href="https://wiki.example.internal/x/AbCd9">same, absolute</a> '
+                '<a href="https://wiki.example.internal/x/QwErTz">two</a>'}}}
+    nodes, edges = EX.extract(_w(tmp_path, "70.page.json", data))
+    page = _ids(nodes)["page/70"]
+    # deduped (relative + absolute of the same id collapse), order preserved
+    assert page["tiny_links"] == ["AbCd9", "QwErTz"]
+    # tiny ids are NOT page ids — no links-to edge may be fabricated from them
+    assert not any(e["type"] == "links-to" for e in edges)
+
+
+def test_status_attr_only_when_not_current(tmp_path):
+    archived = {"id": "80", "title": "Old Runbook", "status": "archived",
+                "space": {"key": "ENG"}, "body": {"storage": {"value": "x"}}}
+    nodes, _ = EX.extract(_w(tmp_path, "80.page.json", archived))
+    assert _ids(nodes)["page/80"]["status"] == "archived"
+
+    current = {"id": "81", "title": "Live Page", "status": "current",
+               "space": {"key": "ENG"}, "body": {"storage": {"value": "x"}}}
+    nodes, _ = EX.extract(_w(tmp_path, "81.page.json", current))
+    assert "status" not in _ids(nodes)["page/81"]   # the default is not knowledge
+
+
 def test_jira_macro_keys_attr_only_no_build_edge(tmp_path):
     data = {"id": "5", "title": "Runbook", "space": {"key": "ENG"},
             "body": {"storage": {"value":

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from graphbuilder.confluence.parse import (
     CPage, parse_page, iter_page_links, iter_attachment_refs,
-    iter_user_mentions, iter_external_urls, body_text,
+    iter_user_mentions, iter_external_urls, iter_tiny_links, body_text,
 )
 
 STORAGE = (
@@ -54,7 +54,29 @@ def test_scanners_never_raise_on_broken_markup():
         assert isinstance(iter_attachment_refs(bad), list)
         assert isinstance(iter_user_mentions(bad), list)
         assert isinstance(iter_external_urls(bad), list)
+        assert isinstance(iter_tiny_links(bad), list)
         assert isinstance(body_text(bad), str)
+
+
+def test_iter_tiny_links_relative_and_absolute():
+    s = ('<a href="/x/AbCd9-_">short</a> '
+         '<a href="https://wiki.example.internal/x/QwErTz/">abs</a> '
+         '<a href="https://wiki.example.internal/display/ENG/Full+Page">full</a> '
+         '<a href="/pages/x/NotTiny">deep path</a> '
+         '<a href="https://wiki.example.internal/pages/x/NotTiny">deep abs</a>')
+    # only WHOLE-href /x/<id> forms match; the id is captured, host dropped
+    assert iter_tiny_links(s) == ["AbCd9-_", "QwErTz"]
+
+
+def test_iter_tiny_links_not_scanned_inside_cdata(tmp_path):
+    s = ('<a href="/x/RealTiny">r</a>'
+         '<ac:structured-macro ac:name="code"><ac:plain-text-body>'
+         '<![CDATA[<a href="/x/FakeTiny">x</a>]]>'
+         '</ac:plain-text-body></ac:structured-macro>')
+    f = tmp_path / "8.page.json"
+    f.write_text(json.dumps({"id": "8", "title": "Tiny Doc", "space": {"key": "ENG"},
+                             "body": {"storage": {"value": s}}}), "utf-8")
+    assert parse_page(f).tiny_links == ["RealTiny"]   # CDATA example excluded
 
 
 def _dump(tmp_path: Path, data) -> Path:
@@ -89,6 +111,22 @@ def test_parse_page_tolerates_minimal(tmp_path):
     assert (p.id, p.title) == ("5", "Bare")
     assert p.space_key == "" and p.parent_id == "" and p.labels == [] and p.version == 0
     assert p.links == [] and p.body_text == ""
+    # history/version/status not expanded in this dump -> empty, never raises
+    assert p.created == "" and p.updated == "" and p.status == "" and p.tiny_links == []
+
+
+def test_parse_page_status_and_timestamps(tmp_path):
+    data = {
+        "id": "44", "title": "Old Runbook", "status": "archived",
+        "space": {"key": "ENG"},
+        "history": {"createdDate": "2024-02-01T09:30:00.000Z"},
+        "version": {"number": 3, "when": "2025-11-20T14:05:00.000Z"},
+        "body": {"storage": {"value": "x"}},
+    }
+    p = parse_page(_dump(tmp_path, data))
+    assert p.status == "archived"
+    assert p.created == "2024-02-01T09:30:00.000Z"
+    assert p.updated == "2025-11-20T14:05:00.000Z"
 
 
 def test_parse_page_non_dict_returns_empty(tmp_path):
