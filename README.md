@@ -184,35 +184,48 @@ python3 -m graphbuilder jira-dump/ -o jira-dump/jira-graph.json
 - Same confidentiality posture: dumps and built Jira graphs hold real issue text —
   gitignored, never committed or egressed.
 
-## Office documents (a `docs` source — .docx)
+## Office documents (a `docs` source — .docx / .xlsx)
 
-Loose specification documents digest into their own separate graph — no collect
-step, the files themselves are the source (stdlib `zipfile` + `xml.etree`, no new
-dependencies). Only OOXML is read: legacy binary `.doc` is rejected by `handles()`.
+Loose specification documents and mapping workbooks digest into their own
+separate graph — no collect step, the files themselves are the source (stdlib
+`zipfile` + `xml.etree`, no new dependencies). Only OOXML is read: legacy binary
+`.doc` / `.xls` and `.xlsb` are rejected by `handles()`; macro-enabled `.xlsm`
+is handled like `.xlsx` with a `has_macros` attr (macro content is never read).
 
 - **Nodes** `docfile` (content-hash id `docfile/<sha1-12>` — rename-stable, dedup
   natural; filename as label; `doc_type` / `structure` / `title` / `modified`
-  attrs) · `docsection` (ordinal-stable ids `docsection/<sha1-12>#<n>`; heading
-  text as label; section body text as the deliberate content capture, like
-  Confluence page bodies); **edges** reuse `contains` (docfile → top-level
-  section) and `child-of` (section → parent section).
+  attrs) · `docsection` (Word; ordinal-stable ids `docsection/<sha1-12>#<n>`,
+  heading text as label, section body text as the deliberate content capture,
+  like Confluence page bodies) · `sheet` (`sheet/<sha1-12>#<name>`, row/col
+  extent) · `datatable` (declared Excel Tables — their header row is *declared*,
+  not guessed); **edges** reuse `contains` (docfile → section/sheet, sheet →
+  datatable) and `child-of` (section → parent section). Column headers are a
+  `columns` **attr** on section/sheet/table nodes — a node per column is noise.
 - **Structure detection is tiered, never guessed uniformly** (`structure` attr):
-  - **declared** — `w:pStyle` Heading1–9 / Title or an explicit `w:outlineLvl`
-    (trusted as-is);
-  - **heuristic** — bold-short-paragraph sections (< 80 chars, all-bold, no
+  - **declared** — Word `w:pStyle` Heading1–9 / Title or an explicit
+    `w:outlineLvl`; Excel Table parts (`xl/tables/*.xml`) — trusted as-is;
+  - **heuristic** — Word bold-short-paragraph sections (< 80 chars, all-bold, no
     trailing period), applied **only when the document declares zero headings**
-    (tiers never mix); each such section carries `confidence: "heuristic"`;
-  - **none** — an honest flat `docfile` carrying the body text. Sections are
-    never fabricated; losing structure costs navigation, not knowledge.
-- Word tables contribute their first-row cells as a `columns` attr on the owning
-  section (names only — a node per column is noise; data rows never enter the
-  graph). Detected references (Jira keys, `X__c` API names, URLs) are **attrs
-  only, never edges** — wiring `docs` to other sources would be a deliberate
-  later join, like Confluence `jira_keys`.
+    (tiers never mix in one text flow); Excel first-row-as-header on table-less
+    sheets, accepted only when the row is all-string, non-empty and unique AND
+    is pinned by a frozen top pane or confirmed by type contrast in the rows
+    below. Every heuristic result carries `confidence: "heuristic"`;
+  - **none** — an honest flat `docfile` (Word: body text on the node; Excel:
+    sheet dimensions only). Structure is never fabricated; losing it costs
+    navigation, not knowledge — the raw file keeps everything.
+- **The Excel value-zoo is neutralized by policy, not parsing heroics:** NAMES
+  only (sheet / table / column / defined names) — cell values and formula bodies
+  never enter the graph. Word tables contribute their first-row cells as the
+  owning section's `columns` attr (data rows never enter the graph). Detected
+  references (Jira keys, `X__c` API names, URLs) are **attrs only, never
+  edges** — wiring `docs` to other sources would be a deliberate later join,
+  like Confluence `jira_keys`; in workbooks only the captured *names* are
+  scanned, so a cell value can never ride in inside a matched ref.
 
-> **Content & confidentiality.** Section text is captured (like page bodies), so
-> built `docs` graphs are sensitive — gitignored, never committed or egressed.
-> Author names are never read from `docProps` (anonymization by default).
+> **Content & confidentiality.** Word section text is captured (like page
+> bodies), so built `docs` graphs are sensitive — gitignored, never committed or
+> egressed. Author names are never read from `docProps` (anonymization by
+> default).
 
 ## Knowledge-base bundle (portable, zip + text, no DB)
 Package one or both sources into a self-contained **knowledge base** — a zip of
