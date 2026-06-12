@@ -184,6 +184,36 @@ python3 -m graphbuilder jira-dump/ -o jira-dump/jira-graph.json
 - Same confidentiality posture: dumps and built Jira graphs hold real issue text —
   gitignored, never committed or egressed.
 
+## Office documents (a `docs` source — .docx)
+
+Loose specification documents digest into their own separate graph — no collect
+step, the files themselves are the source (stdlib `zipfile` + `xml.etree`, no new
+dependencies). Only OOXML is read: legacy binary `.doc` is rejected by `handles()`.
+
+- **Nodes** `docfile` (content-hash id `docfile/<sha1-12>` — rename-stable, dedup
+  natural; filename as label; `doc_type` / `structure` / `title` / `modified`
+  attrs) · `docsection` (ordinal-stable ids `docsection/<sha1-12>#<n>`; heading
+  text as label; section body text as the deliberate content capture, like
+  Confluence page bodies); **edges** reuse `contains` (docfile → top-level
+  section) and `child-of` (section → parent section).
+- **Structure detection is tiered, never guessed uniformly** (`structure` attr):
+  - **declared** — `w:pStyle` Heading1–9 / Title or an explicit `w:outlineLvl`
+    (trusted as-is);
+  - **heuristic** — bold-short-paragraph sections (< 80 chars, all-bold, no
+    trailing period), applied **only when the document declares zero headings**
+    (tiers never mix); each such section carries `confidence: "heuristic"`;
+  - **none** — an honest flat `docfile` carrying the body text. Sections are
+    never fabricated; losing structure costs navigation, not knowledge.
+- Word tables contribute their first-row cells as a `columns` attr on the owning
+  section (names only — a node per column is noise; data rows never enter the
+  graph). Detected references (Jira keys, `X__c` API names, URLs) are **attrs
+  only, never edges** — wiring `docs` to other sources would be a deliberate
+  later join, like Confluence `jira_keys`.
+
+> **Content & confidentiality.** Section text is captured (like page bodies), so
+> built `docs` graphs are sensitive — gitignored, never committed or egressed.
+> Author names are never read from `docProps` (anonymization by default).
+
 ## Knowledge-base bundle (portable, zip + text, no DB)
 Package one or both sources into a self-contained **knowledge base** — a zip of
 text/JSON an on-prem agent can navigate offline. Two layers joined by pointers: a lean
