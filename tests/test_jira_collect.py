@@ -24,16 +24,24 @@ class _Resp:
 
 class _FakeOpener:
     """Serves canned issues with real startAt/maxResults/total semantics, plus
-    per-issue remote links when the URL asks for them."""
+    the /rest/api/2/field discovery list and per-issue remote links when the URL
+    asks for them. Records every request's method + body for read-only asserts."""
 
-    def __init__(self, issues_by_project, remotelinks=None):
+    def __init__(self, issues_by_project, remotelinks=None, fields=None):
         self.issues_by_project = issues_by_project
         self.remotelinks = remotelinks or {}
+        self.fields = fields or []          # canned /rest/api/2/field payload
         self.urls = []
+        self.methods = []
+        self.bodies = []
 
     def open(self, req, timeout=None):
         self.urls.append(req.full_url)
+        self.methods.append(req.get_method())
+        self.bodies.append(req.data)
         url = urllib.parse.urlparse(req.full_url)
+        if url.path.endswith("/rest/api/2/field"):
+            return _Resp(self.fields)
         if "/remotelink" in url.path:
             key = urllib.parse.unquote(url.path.split("/issue/")[1].split("/")[0])
             return _Resp(self.remotelinks.get(key, []))
@@ -61,7 +69,8 @@ def test_collect_writes_issues_and_paginates(tmp_path):
     assert summary["issues"] == 3 and summary["projects"]["ACME"] == 3
     assert (tmp_path / "ACME" / "ACME-1.issue.json").exists()
     assert (tmp_path / "ACME" / "ACME-3.issue.json").exists()
-    assert len(op.urls) == 2          # startAt=0 (2 of 3) then startAt=2 (total reached)
+    # field discovery, then startAt=0 (2 of 3), then startAt=2 (total reached)
+    assert len(op.urls) == 3
 
 
 def test_token_from_env(tmp_path, monkeypatch):
@@ -84,11 +93,70 @@ def test_bad_project_key_raises(tmp_path):
 
 
 def test_token_never_written_to_disk_or_summary(tmp_path):
-    op = _FakeOpener({"ACME": [_issue("ACME-1")]})
+    op = _FakeOpener({"ACME": [_issue("ACME-1")]},
+                     fields=[{"id": "customfield_10100", "name": "Epic Link"},
+                             {"id": "customfield_10101", "name": "Sprint"}])
     summary = collect("https://j", "ACME", tmp_path, token="SUPER-SECRET",
                       opener=op, sleep=NO_SLEEP)
-    blob = (tmp_path / "ACME" / "ACME-1.issue.json").read_text("utf-8") + json.dumps(summary)
+    blob = (tmp_path / "ACME" / "ACME-1.issue.json").read_text("utf-8") \
+        + (tmp_path / "_fields.json").read_text("utf-8") + json.dumps(summary)
     assert "SUPER-SECRET" not in blob
+
+
+_FIELD_LIST = [  # canned /rest/api/2/field payload (fictional ids)
+    {"id": "summary", "name": "Summary"},
+    {"id": "customfield_10100", "name": "Epic Link"},
+    {"id": "customfield_10101", "name": "Sprint"},
+    {"id": "customfield_10200", "name": "Story Points"},
+]
+
+
+def test_field_discovery_get_only_and_fields_json_written(tmp_path):
+    op = _FakeOpener({"ACME": [_issue("ACME-1")]}, fields=_FIELD_LIST)
+    summary = collect("https://j", "ACME", tmp_path, token="t",
+                      opener=op, sleep=NO_SLEEP)
+    assert summary["errors"] == []
+    # exactly one discovery request, before the search, via the GET helper:
+    # every request the collector ever makes is a body-less GET
+    field_urls = [u for u in op.urls if u.endswith("/rest/api/2/field")]
+    assert len(field_urls) == 1 and op.urls[0] == field_urls[0]
+    assert set(op.methods) == {"GET"} and set(op.bodies) == {None}
+    # only the Epic Link / Sprint ids land in the map (Story Points is noise)
+    mapping = json.loads((tmp_path / "_fields.json").read_text("utf-8"))
+    assert mapping == {"customfield_10100": "Epic Link",
+                       "customfield_10101": "Sprint"}
+    # ...and the discovered ids are appended to the per-issue fields request
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(op.urls[1]).query)
+    requested = q["fields"][0].split(",")
+    assert {"customfield_10100", "customfield_10101"} <= set(requested)
+    assert "customfield_10200" not in requested and "summary" in requested
+
+
+def test_field_discovery_tolerates_absent_epic_and_sprint(tmp_path):
+    op = _FakeOpener({"ACME": [_issue("ACME-1")]},
+                     fields=[{"id": "summary", "name": "Summary"}])
+    summary = collect("https://j", "ACME", tmp_path, token="t",
+                      opener=op, sleep=NO_SLEEP)
+    assert summary["issues"] == 1 and summary["errors"] == []
+    assert json.loads((tmp_path / "_fields.json").read_text("utf-8")) == {}
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(op.urls[1]).query)
+    assert "customfield" not in q["fields"][0]
+
+
+def test_field_discovery_failure_degrades_not_fatal(tmp_path):
+    class _FieldErrOpener(_FakeOpener):
+        def open(self, req, timeout=None):
+            if urllib.parse.urlparse(req.full_url).path.endswith("/rest/api/2/field"):
+                raise urllib.error.HTTPError(req.full_url, 404, "nope", {}, None)
+            return super().open(req, timeout)
+
+    op = _FieldErrOpener({"ACME": [_issue("ACME-1")]})
+    summary = collect("https://j", "ACME", tmp_path, token="t",
+                      opener=op, sleep=NO_SLEEP)
+    assert summary["issues"] == 1                      # issues still collected
+    assert any(e.get("project") is None and "field discovery" in e["error"]
+               for e in summary["errors"])
+    assert not (tmp_path / "_fields.json").exists()    # nothing misleading written
 
 
 def test_incremental_skips_unchanged_updated(tmp_path):
